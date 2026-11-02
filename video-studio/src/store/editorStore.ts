@@ -288,8 +288,16 @@ export const useEditor = create<EditorState>((set, get) => {
       set({
         assets: [],
         clips: [],
+        tracks: [
+          { id: 'v1', kind: 'video', name: 'V1', muted: false, locked: false },
+          { id: 'a1', kind: 'audio', name: 'A1', muted: false, locked: false },
+          { id: 't1', kind: 'text', name: 'T1', muted: false, locked: false },
+        ],
+        settings: get().settings,
+        name: 'Untitled project',
         playhead: 0,
         playing: false,
+        zoom: 60,
         selectedClipId: null,
         selectedAssetId: null,
         past: [],

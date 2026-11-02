@@ -351,7 +351,14 @@ export class Compositor {
     drawW *= scale;
     drawH *= scale;
 
-    ctx.translate(width / 2 + clip.transform.x * width + offsetX, height / 2 + clip.transform.y * height);
+    let tx = width / 2 + offsetX;
+    let ty = height / 2 + clip.transform.y * height;
+    if (clip.transform.fit === 'cover') {
+      if (drawW > width) tx -= (drawW - width) / 2;
+      if (drawH > height) ty -= (drawH - height) / 2;
+    }
+
+    ctx.translate(tx, ty);
     ctx.rotate(rotation);
 
     if (transition.type === 'wipe') {
