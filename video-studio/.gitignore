@@ -1,0 +1,5 @@
+node_modules/
+dist/
+*.tsbuildinfo
+public/ffmpeg/ffmpeg-core.wasm
+public/ffmpeg/ffmpeg-core.js

@@ -79,6 +79,41 @@ install, open a binary in Ghidra, and ask in plain language:
 
 See [docs/workflow.md](docs/workflow.md) for the full loop.
 
+## Video studio (in-browser editor)
+
+A second, fully client-side video editor lives in [`video-studio/`](video-studio).
+It is an attempt to reproduce the *workflow* of a professional NLE (Resolve /
+Premiere / Final Cut) without proprietary code: multi-track timeline, trim, split,
+merge, transitions, colour grading, chroma key, text animation, auto-captions and
+export — all powered by React + TypeScript + Tailwind + FFmpeg (WebAssembly).
+
+```powershell
+cd video-studio
+npm install
+npm run dev        # http://localhost:5173
+```
+
+### Feature checklist
+
+- Media pool: import by picker or drag-and-drop (MP4 / WebM / MOV / MP3 / WAV / PNG / JPG).
+- Timeline: multiple video / audio / text tracks, drag to move, edge handles to trim,
+  split at playhead (S), merge with next (M), duplicate (Ctrl+D), delete (Del).
+- Transitions: cross-fade, dip to black, slide, wipe — plus per-clip fade in/out.
+- Colour grading: brightness / contrast / saturation / hue / blur / sepia / monochrome.
+- Chroma key: GPU-accelerated WebGL keyer with similarity / edge blend / spill removal.
+- Text overlays: 8 animations (fade, pop, slide, typewriter), fonts, colours, backgrounds.
+- Auto-captions: Whisper (English, tiny) through transformers.js — fully local in WASM.
+- Export: real FFmpeg compiled to WASM → libx264 + AAC (MP4) or VP9 + Vorbis (WebM),
+  720p / 1080p / 1440p / 4K, variable framerate and bitrate.
+
+### Notes and limits
+
+- Everything runs client-side; nothing leaves the machine except the FFmpeg wasm core
+  itself. Media and projects are not uploaded.
+- Export renders through ffmpeg.wasm, so 4K takes minutes per minute of footage
+  (fast presets on a decent CPU).
+- The preview composites on a 2D canvas; chroma key is GPU (WebGL).
+
 ## Scope
 
 Only analyse binaries you own or are licensed to inspect. `labs/` is git-ignored
