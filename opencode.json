@@ -1,0 +1,15 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "ghidra": {
+      "type": "local",
+      "command": ["E:\\OTHER\\Reverse-clone\\.venv\\Scripts\\ghidra-mcp.exe"],
+      "environment": {
+        "JAVA_HOME": "E:\\REA\\tools\\jdk21",
+        "GHIDRA_INSTALL_DIR": "E:\\REA\\tools\\ghidra_12.1.4_PUBLIC"
+      },
+      "enabled": true,
+      "timeout": 120000
+    }
+  }
+}

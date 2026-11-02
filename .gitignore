@@ -1,0 +1,38 @@
+# Toolchain (installed outside the repo, but guard anyway)
+tools/
+downloads/
+.venv/
+venv/
+
+# Ghidra projects and analysis output
+*.gpr
+*.rep/
+*.lock
+*.lock~
+labs/**/output/
+!labs/**/.gitkeep
+
+# Binaries under analysis — never commit samples
+labs/**/*.exe
+labs/**/*.dll
+labs/**/*.bin
+labs/**/*.so
+labs/**/*.dylib
+labs/**/*.apk
+labs/**/*.dex
+labs/**/*.elf
+!labs/**/.gitkeep
+
+# Logs and scratch
+*.log
+*.tmp
+tmp/
+scratch/
+.cache/
+
+# Editor / OS
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+.DS_Store
