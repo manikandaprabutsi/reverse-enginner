@@ -3,6 +3,7 @@ tools/
 downloads/
 .venv/
 venv/
+.vite/
 
 # Ghidra projects and analysis output
 *.gpr
