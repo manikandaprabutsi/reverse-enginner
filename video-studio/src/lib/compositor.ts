@@ -201,7 +201,7 @@ export class Compositor {
 
       const expected = clip.inPoint + (time - clip.start) * clip.speed;
       el.playbackRate = Math.min(4, Math.max(0.0625, clip.speed));
-      el.volume = Math.max(0, Math.min(1, clip.volume));
+      el.volume = Math.max(0, Math.min(1, clip.volume * (track?.volume ?? 1)));
       el.muted = clip.muted || Boolean(track?.muted) || asset.kind !== 'video';
 
       if (Math.abs(el.currentTime - expected) > 0.22 && Number.isFinite(expected)) {

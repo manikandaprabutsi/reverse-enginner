@@ -327,7 +327,7 @@ export async function exportProject(
       `[${idx}:a]atrim=start=${clip.inPoint.toFixed(3)}:end=${(clip.inPoint + clip.duration * clip.speed).toFixed(3)}`,
       'asetpts=PTS-STARTPTS',
       ...atempoChain(clip.speed),
-      `volume=${clip.volume.toFixed(3)}`,
+      `volume=${(clip.volume * (project.tracks.find((t) => t.id === clip.trackId)?.volume ?? 1)).toFixed(3)}`,
       `adelay=${Math.round(clip.start * 1000)}|${Math.round(clip.start * 1000)}`,
     ];
     if (clip.effects.fadeIn > 0) parts.push(`afade=t=in:st=0:d=${clip.effects.fadeIn.toFixed(3)}`);

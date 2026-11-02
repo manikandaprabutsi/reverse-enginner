@@ -24,6 +24,8 @@ export interface Track {
   name: string;
   muted: boolean;
   locked: boolean;
+  /** per-track gain (1 = unity), used for mixing down to the master */
+  volume: number;
 }
 
 export interface Transform {

@@ -301,6 +301,16 @@ export function Timeline({ className }: { className?: string }) {
                     >
                       {track.locked ? <Lock size={11} className="text-amber-400" /> : <LockOpen size={11} />}
                     </button>
+                    <input
+                      type="range"
+                      min={0}
+                      max={1}
+                      step={0.01}
+                      value={track.volume}
+                      onChange={(e) => updateTrack(track.id, { volume: Number(e.target.value) })}
+                      className="h-3 w-10 accent-[#ff7a18]"
+                      title={`Track volume ${Math.round(track.volume * 100)}%`}
+                    />
                     <button
                       className="icon-btn h-5 w-5"
                       onClick={() => removeTrack(track.id)}

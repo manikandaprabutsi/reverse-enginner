@@ -111,9 +111,9 @@ export const useEditor = create<EditorState>((set, get) => {
     name: 'Untitled project',
     assets: [],
     tracks: [
-      { id: 'v1', kind: 'video', name: 'V1', muted: false, locked: false },
-      { id: 'a1', kind: 'audio', name: 'A1', muted: false, locked: false },
-      { id: 't1', kind: 'text', name: 'T1', muted: false, locked: false },
+      { id: 'v1', kind: 'video', name: 'V1', muted: false, locked: false, volume: 1 },
+      { id: 'a1', kind: 'audio', name: 'A1', muted: false, locked: false, volume: 1 },
+      { id: 't1', kind: 'text', name: 'T1', muted: false, locked: false, volume: 1 },
     ],
     clips: [],
     settings: initialSettings,
@@ -146,6 +146,7 @@ export const useEditor = create<EditorState>((set, get) => {
         name: `${prefix.toUpperCase()}${sameKind.length + 1}`,
         muted: false,
         locked: false,
+        volume: 1,
       };
       const tracks = [...state.tracks];
       const lastIndex = tracks.map((t) => t.kind).lastIndexOf(kind);
@@ -289,9 +290,9 @@ export const useEditor = create<EditorState>((set, get) => {
         assets: [],
         clips: [],
         tracks: [
-          { id: 'v1', kind: 'video', name: 'V1', muted: false, locked: false },
-          { id: 'a1', kind: 'audio', name: 'A1', muted: false, locked: false },
-          { id: 't1', kind: 'text', name: 'T1', muted: false, locked: false },
+          { id: 'v1', kind: 'video', name: 'V1', muted: false, locked: false, volume: 1 },
+          { id: 'a1', kind: 'audio', name: 'A1', muted: false, locked: false, volume: 1 },
+          { id: 't1', kind: 'text', name: 'T1', muted: false, locked: false, volume: 1 },
         ],
         settings: get().settings,
         name: 'Untitled project',
