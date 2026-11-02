@@ -328,14 +328,12 @@ export async function exportProject(
       'asetpts=PTS-STARTPTS',
       ...atempoChain(clip.speed),
       `volume=${clip.volume.toFixed(3)}`,
+      `adelay=${Math.round(clip.start * 1000)}|${Math.round(clip.start * 1000)}`,
     ];
     if (clip.effects.fadeIn > 0) parts.push(`afade=t=in:st=0:d=${clip.effects.fadeIn.toFixed(3)}`);
     if (clip.effects.fadeOut > 0) {
-      parts.push(
-        `afade=t=out:st=${(clip.duration - clip.effects.fadeOut).toFixed(3)}:d=${clip.effects.fadeOut.toFixed(3)}`,
-      );
+      parts.push(`afade=t=out:st=${(clip.duration - clip.effects.fadeOut).toFixed(3)}:d=${clip.effects.fadeOut.toFixed(3)}`);
     }
-    parts.push(`adelay=${Math.round(clip.start * 1000)}|${Math.round(clip.start * 1000)}`);
     filters.push(`${parts.join(',')}[${label}]`);
     audioLabels.push(`[${label}]`);
   }
