@@ -5,7 +5,9 @@ import {
   Loader2,
   Mic,
   Palette,
+  Plus,
   Sparkles,
+  Trash2,
   Type,
   Video,
   Volume2,
@@ -13,7 +15,13 @@ import {
 } from 'lucide-react';
 import clsx from 'clsx';
 import { useEditor } from '../store/editorStore';
-import { RESOLUTIONS, type ExportOptions, type TextAnimation } from '../types';
+import {
+  DEFAULT_POWER_WINDOW,
+  RESOLUTIONS,
+  type ExportOptions,
+  type PowerWindow,
+  type TextAnimation,
+} from '../types';
 import { exportProject, estimateExportSizeMb, getFFmpeg } from '../lib/export';
 import {
   transcribe,
@@ -58,6 +66,38 @@ export function Inspector() {
 
   const clip = clips.find((c) => c.id === selectedClipId) ?? null;
   const asset = clip?.assetId ? assets.find((a) => a.id === clip.assetId) : undefined;
+
+  const patchWindow = (index: number, patch: Partial<PowerWindow>) => {
+    if (!clip) return;
+    const windows = [...(clip.windows ?? [])];
+    if (!windows[index]) return;
+    windows[index] = { ...windows[index], ...patch };
+    updateClip(clip.id, { windows });
+  };
+
+  const patchWindowSetting = (
+    index: number,
+    key: keyof PowerWindow['settings'],
+    value: number,
+  ) => {
+    if (!clip) return;
+    const windows = [...(clip.windows ?? [])];
+    const win = windows[index];
+    if (!win) return;
+    windows[index] = { ...win, settings: { ...win.settings, [key]: value } };
+    updateClip(clip.id, { windows });
+  };
+
+  const addPowerWindow = () => {
+    if (!clip) return;
+    const nextWindow: PowerWindow = {
+      ...DEFAULT_POWER_WINDOW,
+      id: `pw-${Date.now().toString(36)}`,
+      name: `Window ${(clip.windows?.length ?? 0) + 1}`,
+      settings: { ...DEFAULT_POWER_WINDOW.settings },
+    };
+    updateClip(clip.id, { windows: [...(clip.windows ?? []), nextWindow] });
+  };
 
   const [tab, setTab] = useState<Tab>('clip');
 
@@ -597,6 +637,185 @@ export function Inspector() {
                   onChange={(v) => updateClip(clip.id, { chroma: { ...clip.chroma, spill: v } })}
                 />
               </div>
+            </div>
+          ))}
+
+        {/* ---------------- POWER WINDOWS ---------------- */}
+        {tab === 'power' &&
+          (!clip || clip.text ? (
+            <EmptyState icon={<Wand2 size={18} />} text="Select a video clip to add correction windows" />
+          ) : (
+            <div className="space-y-3 p-3">
+              <button
+                onClick={addPowerWindow}
+                className="flex w-full items-center justify-center gap-1.5 rounded-md border border-ink-600 bg-ink-800 py-1.5 text-[11px] font-medium text-zinc-300 transition hover:bg-ink-750"
+              >
+                <Plus size={13} /> Add power window
+              </button>
+
+              {(clip.windows ?? []).length === 0 && (
+                <p className="py-6 text-center text-[11px] text-zinc-500">
+                  No windows yet. Add one to grade a region of the frame.
+                </p>
+              )}
+
+              {(clip.windows ?? []).map((win, index) => (
+                <div key={win.id} className="space-y-2 rounded-md border border-ink-700 bg-ink-800 p-2.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-semibold text-zinc-300">{win.name}</span>
+                    <div className="flex items-center gap-2">
+                      <label className="flex items-center gap-1 text-[10px] text-zinc-500">
+                        <input
+                          type="checkbox"
+                          checked={win.enabled}
+                          onChange={(e) => patchWindow(index, { enabled: e.target.checked })}
+                          className="accent-[var(--color-accent)]"
+                        />
+                        On
+                      </label>
+                      <button
+                        onClick={() =>
+                          updateClip(clip.id, {
+                            windows: (clip.windows ?? []).filter((w) => w.id !== win.id),
+                          })
+                        }
+                        className="text-zinc-500 transition hover:text-red-400"
+                        title="Remove window"
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
+                  </div>
+
+                  <Slider
+                    label="Position X"
+                    min={0}
+                    max={1}
+                    step={0.01}
+                    value={win.x}
+                    onChange={(v) => patchWindow(index, { x: v })}
+                  />
+                  <Slider
+                    label="Position Y"
+                    min={0}
+                    max={1}
+                    step={0.01}
+                    value={win.y}
+                    onChange={(v) => patchWindow(index, { y: v })}
+                  />
+                  <Slider
+                    label="Width"
+                    min={0.02}
+                    max={1}
+                    step={0.01}
+                    value={win.w}
+                    onChange={(v) => patchWindow(index, { w: v })}
+                  />
+                  <Slider
+                    label="Height"
+                    min={0.02}
+                    max={1}
+                    step={0.01}
+                    value={win.h}
+                    onChange={(v) => patchWindow(index, { h: v })}
+                  />
+                  <Slider
+                    label="Opacity"
+                    min={0}
+                    max={1}
+                    step={0.01}
+                    value={win.opacity}
+                    onChange={(v) => patchWindow(index, { opacity: v })}
+                  />
+
+                  <div className="grid grid-cols-2 gap-2 border-t border-ink-700 pt-2">
+                    <label className="flex items-center gap-1.5 text-[10px] text-zinc-500">
+                      <input
+                        type="checkbox"
+                        checked={win.invert}
+                        onChange={(e) => patchWindow(index, { invert: e.target.checked })}
+                        className="accent-[var(--color-accent)]"
+                      />
+                      Invert
+                    </label>
+                    <select
+                      className="rounded border border-ink-600 bg-ink-800 px-1.5 py-1 text-[10px] text-zinc-300"
+                      value={win.blend}
+                      onChange={(e) =>
+                        patchWindow(index, { blend: e.target.value as PowerWindow['blend'] })
+                      }
+                    >
+                      <option value="normal">Normal</option>
+                      <option value="multiply">Multiply</option>
+                      <option value="screen">Screen</option>
+                      <option value="overlay">Overlay</option>
+                      <option value="darken">Darken</option>
+                      <option value="lighten">Lighten</option>
+                    </select>
+                  </div>
+
+                  <div className="space-y-2 border-t border-ink-700 pt-2">
+                    <Slider
+                      label="Brightness"
+                      min={0}
+                      max={2}
+                      step={0.01}
+                      value={win.settings.brightness}
+                      onChange={(v) => patchWindowSetting(index, 'brightness', v)}
+                    />
+                    <Slider
+                      label="Contrast"
+                      min={0}
+                      max={2}
+                      step={0.01}
+                      value={win.settings.contrast}
+                      onChange={(v) => patchWindowSetting(index, 'contrast', v)}
+                    />
+                    <Slider
+                      label="Saturation"
+                      min={0}
+                      max={2}
+                      step={0.01}
+                      value={win.settings.saturation}
+                      onChange={(v) => patchWindowSetting(index, 'saturation', v)}
+                    />
+                    <Slider
+                      label="Hue"
+                      min={-180}
+                      max={180}
+                      step={1}
+                      value={win.settings.hue}
+                      onChange={(v) => patchWindowSetting(index, 'hue', v)}
+                      suffix="°"
+                    />
+                    <Slider
+                      label="Blur"
+                      min={0}
+                      max={20}
+                      step={0.5}
+                      value={win.settings.blur}
+                      onChange={(v) => patchWindowSetting(index, 'blur', v)}
+                      suffix="px"
+                    />
+                    <Slider
+                      label="Sepia"
+                      min={0}
+                      max={1}
+                      step={0.01}
+                      value={win.settings.sepia}
+                      onChange={(v) => patchWindowSetting(index, 'sepia', v)}
+                    />
+                    <Slider
+                      label="Monochrome"
+                      min={0}
+                      max={1}
+                      step={0.01}
+                      value={win.settings.grayscale}
+                      onChange={(v) => patchWindowSetting(index, 'grayscale', v)}
+                    />
+                  </div>
+                </div>
+              ))}
             </div>
           ))}
 

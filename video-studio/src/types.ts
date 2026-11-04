@@ -62,6 +62,10 @@ export interface PowerWindow {
   h: number;
   opacity: number; // 0..1
   settings: ColorAdjust;
+  /** Blend mode for the window effect */
+  blend: 'normal' | 'multiply' | 'screen' | 'overlay' | 'darken' | 'lighten';
+  /** Invert mode: when true, grades the area outside the window */
+  invert: boolean;
 }
 
 export interface ChromaKey {
@@ -177,6 +181,8 @@ export const DEFAULT_POWER_WINDOW: PowerWindow = {
   h: 0.4,
   opacity: 1,
   settings: { ...DEFAULT_COLOR, brightness: 1.15 },
+  blend: 'normal',
+  invert: false,
 };
 
 export const DEFAULT_CHROMA: ChromaKey = {

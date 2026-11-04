@@ -374,53 +374,79 @@ export class Compositor {
       /* frame not ready */
     }
 
-    // ----- PowerWindows: draw per‑clip local correction windows ----
-    // Collect active windows for this clip at the current time
-    const activeWindows = (clip.windows ?? [])
-      .filter((w) => w.enabled)
-      .filter((w) => time >= clip.start && time < clip.start + clip.duration);
+    // Close the clip transform/filter state: correction windows live in
+    // frame (screen) space, so they must be painted without the transform.
+    ctx.restore();
 
-    // Overlay each active PowerWindow on top of the base clip
+    // ----- PowerWindows: draw per-clip local correction windows ----
+    const activeWindows = (clip.windows ?? []).filter(
+      (w) => w.enabled && time >= clip.start && time < clip.start + clip.duration,
+    );
+    if (activeWindows.length === 0) return;
+
+    // Map Resolve blend names onto canvas composite operations.
+    const normaliseBlend = (mode: string): GlobalCompositeOperation => {
+      const m = mode.toLowerCase().trim().replace(/\s+/g, '-');
+      const map: Record<string, GlobalCompositeOperation> = {
+        normal: 'source-over',
+        multiply: 'multiply',
+        screen: 'screen',
+        overlay: 'overlay',
+        darken: 'darken',
+        lighten: 'lighten',
+      };
+      return map[m] ?? 'source-over';
+    };
+
+    // Letterbox the raw source into the frame so window rects line up.
+    let fitW = width;
+    let fitH = height;
+    if (srcRatio > dstRatio) fitH = width / srcRatio;
+    else fitW = height * srcRatio;
+    const fitX = (width - fitW) / 2;
+    const fitY = (height - fitH) / 2;
+
     for (const win of activeWindows) {
-      // Map normalised window position/size to pixel space
-      const winW = (win.w ?? 0) * width;
-      const winH = (win.h ?? 0) * height;
-      const winX = (win.x ?? 0) * width - winW / 2;
-      const winY = (win.y ?? 0) * height - winH / 2;
+      const winW = Math.max(2, (win.w ?? 0.4) * width);
+      const winH = Math.max(2, (win.h ?? 0.4) * height);
+      const winX = (win.x ?? 0.5) * width - winW / 2;
+      const winY = (win.y ?? 0.5) * height - winH / 2;
 
-      // Build the window's ColorAdjust filter string
       const wf = win.settings ?? DEFAULT_COLOR;
-      const wFilterParts = [
+      const parts = [
         `brightness(${wf.brightness})`,
         `contrast(${wf.contrast})`,
         `saturate(${wf.saturation})`,
         `hue-rotate(${wf.hue}deg)`,
       ];
-      if (wf.blur > 0) wFilterParts.push(`blur(${wf.blur}px)`);
-      if (wf.sepia > 0) wFilterParts.push(`sepia(${wf.sepia})`);
-      if (wf.grayscale > 0) wFilterParts.push(`grayscale(${wf.grayscale})`);
-      // Apply the window's filter + opacity in a second pass
-      ctx.save();
-      ctx.filter = wFilterParts.join(' ');
-      ctx.globalAlpha = Math.min(1, win.opacity ?? 1);
+      if (wf.blur > 0) parts.push(`blur(${wf.blur}px)`);
+      if (wf.sepia > 0) parts.push(`sepia(${wf.sepia})`);
+      if (wf.grayscale > 0) parts.push(`grayscale(${wf.grayscale})`);
 
-      // Crop to the window rect and redraw the source within it
+      ctx.save();
+      ctx.filter = parts.join(' ');
+      ctx.globalAlpha = Math.min(1, Math.max(0, win.opacity ?? 1));
+      ctx.globalCompositeOperation = normaliseBlend(win.blend ?? 'normal');
+
       ctx.beginPath();
-      ctx.rect(winX, winY, winW, winH);
-      ctx.clip();
+      if (win.invert) {
+        // Grade everything except the window: full-frame path plus the
+        // window path, filled with the even-odd rule.
+        ctx.rect(0, 0, width, height);
+        ctx.rect(winX, winY, winW, winH);
+        ctx.clip('evenodd');
+      } else {
+        ctx.rect(winX, winY, winW, winH);
+        ctx.clip();
+      }
 
       try {
-        ctx.drawImage(source, winX, winY, winW, winH);
+        ctx.drawImage(source, fitX, fitY, fitW, fitH);
       } catch {
         /* frame not ready */
       }
-
       ctx.restore();
     }
-
-    // End of PowerWindow overlay loop
-
-    ctx.restore();
   }
 
   dispose() {

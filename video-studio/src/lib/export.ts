@@ -1,6 +1,6 @@
 import { FFmpeg } from '@ffmpeg/ffmpeg';
 import { toBlobURL } from '@ffmpeg/util';
-import type { Clip, ExportOptions, MediaAsset, Project } from '../types';
+import type { Clip, ExportOptions, MediaAsset, PowerWindow, Project } from '../types';
 import { drawTextLayer } from './textRender';
 
 let instance: FFmpeg | null = null;
@@ -83,6 +83,67 @@ function chromaFilter(clip: Clip): string[] {
   const similarity = clamp(clip.chroma.similarity, 0.01, 1).toFixed(3);
   const blend = clamp(clip.chroma.blend, 0.001, 1).toFixed(3);
   return [`colorkey=${key}:${similarity}:${blend}`];
+}
+
+/* ------------------------------------------------------------------ *
+ * PowerWindows: each enabled local correction is applied to the clip
+ * stream before it is overlaid on the timeline. The window is cropped
+ * from a split of the clip and re-overlaid with the window grade, so
+ * the result matches the preview.
+ * ------------------------------------------------------------------ */
+
+function windowGrade(win: PowerWindow): string[] {
+  const s = win.settings;
+  const parts: string[] = [];
+  if (s.brightness !== 1 || s.contrast !== 1 || s.saturation !== 1) {
+    parts.push(
+      `eq=brightness=${(s.brightness - 1).toFixed(3)}:contrast=${s.contrast.toFixed(3)}:saturation=${s.saturation.toFixed(3)}`,
+    );
+  }
+  if (s.hue !== 0) parts.push(`hue=h=${s.hue.toFixed(1)}`);
+  if (s.grayscale > 0) parts.push(`hue=s=${(1 - s.grayscale).toFixed(3)}`);
+  if (s.sepia > 0) {
+    parts.push(`colorchannelmixer=.393:.769:.189:0:.349:.686:.168:0:.272:.534:.131:0`);
+  }
+  if (s.blur > 0) parts.push(`gblur=sigma=${Math.max(0.1, s.blur / 2).toFixed(2)}`);
+  return parts;
+}
+
+function powerWindowChain(
+  input: string,
+  win: PowerWindow,
+  clip: Clip,
+  width: number,
+  height: number,
+  out: string,
+): string[] {
+  const winW = Math.max(2, Math.round(clamp(win.w ?? 0.4, 0.01, 1) * width));
+  const winH = Math.max(2, Math.round(clamp(win.h ?? 0.4, 0.01, 1) * height));
+  const x = Math.round(clamp((win.x ?? 0.5) * width - winW / 2, 0, width - winW));
+  const y = Math.round(clamp((win.y ?? 0.5) * height - winH / 2, 0, height - winH));
+  const opacity = clamp(win.opacity ?? 1, 0, 1).toFixed(3);
+  const enable = `between(t,${clip.start.toFixed(3)},${(clip.start + clip.duration).toFixed(3)})`;
+  const grade = windowGrade(win);
+  const lines: string[] = [];
+
+  if (win.invert) {
+    // Grade the whole frame, then paint the ungraded window back on top.
+    const graded = `${out}g`;
+    const keep = `${out}k`;
+    lines.push(`[${input}]split[${keep}][${out}src]`);
+    lines.push(`[${out}src]${grade.length ? `${grade.join(',')},` : ''}format=rgba[${graded}]`);
+    lines.push(`[${keep}]crop=${winW}:${winH}:${x}:${y},format=rgba,colorchannelmixer=aa=${opacity}[${keep}c]`);
+    lines.push(`[${graded}][${keep}c]overlay=x=${x}:y=${y}:eof_action=pass:enable='${enable}'[${out}]`);
+  } else {
+    const base = `${out}b`;
+    lines.push(`[${input}]split[${base}][${out}src]`);
+    lines.push(
+      `[${out}src]${[...grade, `crop=${winW}:${winH}:${x}:${y}`, 'format=rgba', `colorchannelmixer=aa=${opacity}`].join(',')}[${out}w]`,
+    );
+    lines.push(`[${base}][${out}w]overlay=x=${x}:y=${y}:eof_action=pass:enable='${enable}'[${out}]`);
+  }
+
+  return lines;
 }
 
 function overlayXY(clip: Clip, width: number, height: number): { x: string; y: string } {
@@ -272,10 +333,19 @@ export async function exportProject(
     chain.push(`setpts=PTS+${clip.start.toFixed(3)}/TB[${label}]`);
     filters.push(chain.join(','));
 
+    // Local correction windows are composited onto the clip in frame space
+    // before the clip is laid onto the timeline.
+    let videoLabel = label;
+    for (const win of (clip.windows ?? []).filter((w) => w.enabled)) {
+      const pw = `pw${counter++}`;
+      filters.push(...powerWindowChain(videoLabel, win, clip, W, H, pw));
+      videoLabel = pw;
+    }
+
     const { x, y } = overlayXY(clip, W, H);
     const next = `o${counter}`;
     filters.push(
-      `[${current}][${label}]overlay=x=${x}:y=${y}:eof_action=pass:repeatlast=0:enable='between(t,${clip.start.toFixed(3)},${(clip.start + clip.duration).toFixed(3)})'[${next}]`,
+      `[${current}][${videoLabel}]overlay=x=${x}:y=${y}:eof_action=pass:repeatlast=0:enable='between(t,${clip.start.toFixed(3)},${(clip.start + clip.duration).toFixed(3)})'[${next}]`,
     );
     current = next;
   }
