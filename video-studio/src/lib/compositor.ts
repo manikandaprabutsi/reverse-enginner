@@ -1,4 +1,5 @@
 import type { Clip, MediaAsset, Track } from '../types';
+import { DEFAULT_COLOR, type PowerWindow } from '../types';
 import { drawTextLayer } from './textRender';
 
 /* ------------------------------------------------------------------ *
@@ -372,6 +373,53 @@ export class Compositor {
     } catch {
       /* frame not ready */
     }
+
+    // ----- PowerWindows: draw per‑clip local correction windows ----
+    // Collect active windows for this clip at the current time
+    const activeWindows = (clip.windows ?? [])
+      .filter((w) => w.enabled)
+      .filter((w) => time >= clip.start && time < clip.start + clip.duration);
+
+    // Overlay each active PowerWindow on top of the base clip
+    for (const win of activeWindows) {
+      // Map normalised window position/size to pixel space
+      const winW = (win.w ?? 0) * width;
+      const winH = (win.h ?? 0) * height;
+      const winX = (win.x ?? 0) * width - winW / 2;
+      const winY = (win.y ?? 0) * height - winH / 2;
+
+      // Build the window's ColorAdjust filter string
+      const wf = win.settings ?? DEFAULT_COLOR;
+      const wFilterParts = [
+        `brightness(${wf.brightness})`,
+        `contrast(${wf.contrast})`,
+        `saturate(${wf.saturation})`,
+        `hue-rotate(${wf.hue}deg)`,
+      ];
+      if (wf.blur > 0) wFilterParts.push(`blur(${wf.blur}px)`);
+      if (wf.sepia > 0) wFilterParts.push(`sepia(${wf.sepia})`);
+      if (wf.grayscale > 0) wFilterParts.push(`grayscale(${wf.grayscale})`);
+      // Apply the window's filter + opacity in a second pass
+      ctx.save();
+      ctx.filter = wFilterParts.join(' ');
+      ctx.globalAlpha = Math.min(1, win.opacity ?? 1);
+
+      // Crop to the window rect and redraw the source within it
+      ctx.beginPath();
+      ctx.rect(winX, winY, winW, winH);
+      ctx.clip();
+
+      try {
+        ctx.drawImage(source, winX, winY, winW, winH);
+      } catch {
+        /* frame not ready */
+      }
+
+      ctx.restore();
+    }
+
+    // End of PowerWindow overlay loop
+
     ctx.restore();
   }
 

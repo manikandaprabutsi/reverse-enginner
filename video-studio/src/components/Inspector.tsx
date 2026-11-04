@@ -42,7 +42,7 @@ const animations: { value: TextAnimation; label: string }[] = [
   { value: 'typewriter', label: 'Typewriter' },
 ];
 
-type Tab = 'clip' | 'text' | 'color' | 'captions' | 'export';
+type Tab = 'clip' | 'text' | 'color' | 'power' | 'captions' | 'export';
 
 export function Inspector() {
   const clips = useEditor((s) => s.clips);
@@ -129,6 +129,7 @@ export function Inspector() {
     { id: 'clip', icon: Video, label: 'Clip' },
     { id: 'text', icon: Type, label: 'Text' },
     { id: 'color', icon: Palette, label: 'Color' },
+    { id: 'power', icon: Wand2, label: 'Power Windows' },
     { id: 'captions', icon: Mic, label: 'Captions' },
     { id: 'export', icon: Download, label: 'Export' },
   ];

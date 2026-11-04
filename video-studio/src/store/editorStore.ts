@@ -10,9 +10,11 @@ import {
   DEFAULT_CHROMA,
   DEFAULT_COLOR,
   DEFAULT_EFFECTS,
+  DEFAULT_POWER_WINDOW,
   DEFAULT_TEXT,
   DEFAULT_TRANSFORM,
   DEFAULT_TRANSITION,
+  DEFAULT_WINDOWS,
 } from '../types';
 
 export interface Snapshot {
@@ -90,6 +92,7 @@ export const makeClip = (partial: Partial<Clip> & { trackId: string }): Clip => 
   muted: false,
   transform: { ...DEFAULT_TRANSFORM },
   color: { ...DEFAULT_COLOR },
+  windows: DEFAULT_WINDOWS,
   chroma: { ...DEFAULT_CHROMA },
   effects: { ...DEFAULT_EFFECTS },
   transitionIn: { ...DEFAULT_TRANSITION },

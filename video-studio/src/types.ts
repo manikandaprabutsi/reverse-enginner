@@ -47,6 +47,23 @@ export interface ColorAdjust {
   grayscale: number; // 0..1
 }
 
+/** A Resolve-style localised correction window (PowerWindow). */
+export interface PowerWindow {
+  id: string;
+  name: string;
+  enabled: boolean;
+  /** normalised position on the frame: 0..1 */
+  x: number;
+  /** normalised position on the frame: 0..1 */
+  y: number;
+  /** normalised width of the window: 0..1 */
+  w: number;
+  /** normalised height of the window: 0..1 */
+  h: number;
+  opacity: number; // 0..1
+  settings: ColorAdjust;
+}
+
 export interface ChromaKey {
   enabled: boolean;
   color: string; // hex
@@ -99,6 +116,8 @@ export interface Clip {
   muted: boolean;
   transform: Transform;
   color: ColorAdjust;
+  /** Resolve-style localised correction windows, painted over the global grade. */
+  windows: PowerWindow[];
   chroma: ChromaKey;
   effects: ClipEffects;
   transitionIn: Transition;
@@ -148,6 +167,18 @@ export const DEFAULT_COLOR: ColorAdjust = {
   grayscale: 0,
 };
 
+export const DEFAULT_POWER_WINDOW: PowerWindow = {
+  id: 'window',
+  name: 'Window 1',
+  enabled: true,
+  x: 0.5,
+  y: 0.5,
+  w: 0.4,
+  h: 0.4,
+  opacity: 1,
+  settings: { ...DEFAULT_COLOR, brightness: 1.15 },
+};
+
 export const DEFAULT_CHROMA: ChromaKey = {
   enabled: false,
   color: '#00b140',
@@ -161,6 +192,8 @@ export const DEFAULT_EFFECTS: ClipEffects = {
   fadeOut: 0,
   zoom: 1,
 };
+
+export const DEFAULT_WINDOWS: PowerWindow[] = [];
 
 export const DEFAULT_TRANSITION: Transition = {
   type: 'none',
