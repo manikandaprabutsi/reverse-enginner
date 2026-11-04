@@ -185,7 +185,7 @@ export function Inspector() {
         )}
       </div>
 
-      <div className="grid grid-cols-5 gap-1 border-b border-ink-700 px-2 py-1">
+      <div className="grid grid-cols-6 gap-1 border-b border-ink-700 px-2 py-1">
         {tabs.map((item) => (
           <button
             key={item.id}
