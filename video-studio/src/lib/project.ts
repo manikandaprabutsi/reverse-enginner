@@ -97,8 +97,8 @@ export function serialiseProject(project: Project): SerializedProject {
     assets: project.assets.map((asset) => {
       const meta: AssetMeta = { id: asset.id, name: asset.name };
       for (const field of META_FIELDS) {
-        const v = (asset as any)[field];
-        if (typeof v !== 'undefined' && v !== null && typeof v === 'string') meta[field] = v;
+        const v = asset[field];
+        if (v !== undefined && v !== null) Object.assign(meta, { [field]: v });
       }
       return meta;
     }),

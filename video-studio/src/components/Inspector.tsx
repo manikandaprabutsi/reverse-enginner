@@ -127,15 +127,14 @@ export function Inspector() {
 
   const canTranscribe = captioningSupported();
 
-  const [opt, setOpt] = useState<ExportOptions>({
-    width: 1920,
-    height: 1080,
-    fps: 30,
+  const [opt, setOpt] = useState<ExportOptions>(() => ({
+    width: settings.width,
+    height: settings.height,
+    fps: settings.fps,
     videoBitrate: '8000k',
     preset: 'fast',
     format: 'mp4',
-    codec: 'h264',
-  });
+  }));
 
   const duration = useMemo(
     () => clips.reduce((max, c) => Math.max(max, c.start + c.duration), 0),
@@ -1270,17 +1269,30 @@ export function Inspector() {
               </div>
             </div>
 
-            <div>
-              <p className="label">Encoder preset</p>
-              <select
-                className="field"
-                value={opt.preset}
-                onChange={(e) => setOpt({ ...opt, preset: e.target.value as ExportOptions['preset'] })}
-              >
-                <option value="ultrafast">Ultrafast (largest file)</option>
-                <option value="fast">Fast</option>
-                <option value="medium">Medium (best quality)</option>
-              </select>
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <p className="label">Container</p>
+                <select
+                  className="field"
+                  value={opt.format}
+                  onChange={(e) => setOpt({ ...opt, format: e.target.value as ExportOptions['format'] })}
+                >
+                  <option value="mp4">MP4</option>
+                  <option value="mov">MOV</option>
+                </select>
+              </div>
+              <div>
+                <p className="label">Encoder preset</p>
+                <select
+                  className="field"
+                  value={opt.preset}
+                  onChange={(e) => setOpt({ ...opt, preset: e.target.value as ExportOptions['preset'] })}
+                >
+                  <option value="ultrafast">Ultrafast (largest file)</option>
+                  <option value="fast">Fast</option>
+                  <option value="medium">Medium (best quality)</option>
+                </select>
+              </div>
             </div>
 
             <div className="rounded-md border border-ink-700 bg-ink-800 p-2 text-[10px] leading-relaxed text-zinc-500">

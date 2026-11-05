@@ -308,8 +308,8 @@ export interface ExportOptions {
   fps: number;
   videoBitrate: string;
   preset: 'ultrafast' | 'fast' | 'medium';
-  format: 'mp4' | 'webm' | 'mov';
-  codec: 'h264' | 'h265';
+  /** MOV uses the same H.264 encode; WebM/H.265 are unusable in ffmpeg.wasm. */
+  format: 'mp4' | 'mov';
 }
 
 export const DEFAULT_TRANSFORM: Transform = {

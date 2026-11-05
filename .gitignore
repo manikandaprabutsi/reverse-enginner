@@ -30,6 +30,7 @@ labs/**/*.elf
 tmp/
 scratch/
 .cache/
+.playwright-mcp/
 
 # Editor / OS
 .vscode/

@@ -9,7 +9,7 @@
      EffectType (16 effects), AudioFilter (eqLow/eqMid/eqHigh/noiseReduction/voiceEnhance/pitch),
      Keyframe (t + Partial<Transform>), TransitionType (21 cinematic transitions),
      TitleTemplate (basic/scroller/lower-third-L/M/R), TextStyle (+template),
-     Track (solo, pan), ExportOptions (codec, format mov), Transform (flipX/flipY/cropTop/Right/Bottom/Left),
+     Track (solo, pan), ExportOptions (format mp4/mov), Transform (flipX/flipY/cropTop/Right/Bottom/Left),
    - Constants: DEFAULT_WHEELS, IDENTITY_CURVE, DEFAULT_CURVES, DEFAULT_AUDIO_FILTER,
      DEFAULT_TEXT, DEFAULT_POWER_WINDOW, DEFAULT_TRANSITION, RESOLUTIONS
 
@@ -51,7 +51,9 @@
    - Audio: EQ (bass/equalizer/treble), noise reduction (afftdn), voice enhance, pitch shift
    - Track solo logic
    - Expanded transition list (21 types)
-   - Codec: libx264 / libx265 (HEVC)
+   - Codec: H.264 (libx264) in MP4 or MOV container. The bundled ffmpeg.wasm
+     build stalls in libx265 and crashes in libvpx-vp9, so those options were
+     removed instead of shipped broken (verified with a direct encoder probe).
    - Deleted asset + temp file cleanup
 
 8. MEDIA / PERSISTENCE (src/lib/media.ts + src/lib/project.ts)
@@ -79,7 +81,7 @@
     - FX tab: category scroll + apply from library; per-FX parameter sliders; parallel/bypass
     - Audio tab: clip gain, EQ low/mid/high, voice enhance, noise reduction, pitch; presets;
       track solo/mute/volume/pan
-    - Export tab: resolution/fps/preset/format selector (mp4/webm/mov); codec choice
+    - Export tab: resolution/fps/bitrate/preset/container (mp4/mov)
 
 11. PREVIEW (src/components/Preview.tsx)
     - Loop playback + speed control (0.25×–4×)
@@ -100,6 +102,12 @@ VERIFIED (Playwright + Vite dev + 720p export)
   - Fairlight mixer, solo, add track, Deliver export tab
   - Save → project JSON, Open → restore, autosave restore after reload
   - Preview renders graded pixels; 6 s 720p H.264 export completes (180 frames)
+  - ffmpeg encoder probe: libx264 MP4+MOV OK; libx265 stalls, libvpx-vp9
+    trips a wasm memory error, so those choices are not exposed
+  - MOV export after an autosave reload contains avc1 + mp4a, with the noise
+    reduction / voice enhancement audio chain applied
+  - Asset metadata (hasAudio, duration, width, height) round-trips through
+    save and autosave restore
   - Mobile 390×844: page nav, LUT tool sheet
 ================================================================================
 

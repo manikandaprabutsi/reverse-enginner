@@ -540,21 +540,18 @@ export async function exportProject(
   };
   ff.on('progress', progressHandler);
 
-  const codec: string[] =
-    options.format === 'webm'
-      ? ['-c:v', 'libvpx-vp9', '-b:v', options.videoBitrate, '-deadline', 'realtime', '-cpu-used', '8', '-c:a', 'libvorbis']
-      : [
-          '-c:v',
-          options.codec === 'h265' ? 'libx265' : 'libx264',
-          '-preset',
-          options.preset,
-          '-b:v',
-          options.videoBitrate,
-          '-c:a',
-          'aac',
-          '-b:a',
-          '192k',
-        ];
+  const codec: string[] = [
+    '-c:v',
+    'libx264',
+    '-preset',
+    options.preset,
+    '-b:v',
+    options.videoBitrate,
+    '-c:a',
+    'aac',
+    '-b:a',
+    '192k',
+  ];
 
   try {
     await ff.exec([
@@ -582,7 +579,7 @@ export async function exportProject(
 
   onProgress({ stage: 'finalising', ratio: 0.95, message: 'Reading output' });
   const data = (await ff.readFile(outputName)) as Uint8Array;
-  const mime = options.format === 'webm' ? 'video/webm' : options.format === 'mov' ? 'video/quicktime' : 'video/mp4';
+  const mime = options.format === 'mov' ? 'video/quicktime' : 'video/mp4';
   const blob = new Blob([data.slice().buffer as ArrayBuffer], { type: mime });
   const url = URL.createObjectURL(blob);
 
