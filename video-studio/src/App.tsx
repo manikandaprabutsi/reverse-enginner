@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import clsx from 'clsx';
 import {
   Clapperboard,
@@ -16,12 +16,33 @@ import { MediaPanel } from './components/MediaPanel';
 import { Preview } from './components/Preview';
 import { Timeline } from './components/Timeline';
 import { Inspector } from './components/Inspector';
+import { PageNav, type ToolId } from './components/PageNav';
+import { ColorPanel } from './components/ColorPanel';
+import { NodeEditor } from './components/NodeEditor';
+import { AudioMixer } from './components/AudioMixer';
+import { EffectsPanel } from './components/EffectsPanel';
+import { LutPanel } from './components/LutPanel';
 import { useEditor } from './store/editorStore';
 import { SHORTCUTS, useShortcuts } from './hooks/useShortcuts';
 import { createDemoFile } from './lib/demo';
 import { importFile } from './lib/media';
+import {
+  autosaveProject,
+  clearAutosave,
+  loadAutosave,
+  openProjectFile,
+  saveProjectFile,
+} from './lib/project';
 
-type MobilePanel = 'media' | 'inspector' | null;
+type MobilePanel = 'media' | 'inspector' | 'tool' | null;
+
+const TOOL_TITLES: Partial<Record<ToolId, string>> = {
+  gallery: 'Gallery',
+  luts: 'LUTs',
+  lightbox: 'Lightbox',
+  library: 'Library',
+  openfx: 'OpenFX',
+};
 
 export default function App() {
   useShortcuts();
@@ -31,6 +52,7 @@ export default function App() {
   const settings = useEditor((s) => s.settings);
   const assets = useEditor((s) => s.assets);
   const clips = useEditor((s) => s.clips);
+  const tracks = useEditor((s) => s.tracks);
   const addAsset = useEditor((s) => s.addAsset);
   const addClip = useEditor((s) => s.addClip);
   const addTextClip = useEditor((s) => s.addTextClip);
@@ -40,12 +62,18 @@ export default function App() {
   const reset = useEditor((s) => s.reset);
   const canUndo = useEditor((s) => s.past.length > 0);
   const canRedo = useEditor((s) => s.future.length > 0);
+  const activePage = useEditor((s) => s.activePage);
+  const setActivePage = useEditor((s) => s.setActivePage);
+  const setInspectorTab = useEditor((s) => s.setInspectorTab);
+  const loadProject = useEditor((s) => s.loadProject);
 
   const [panel, setPanel] = useState<MobilePanel>(null);
+  const [tool, setTool] = useState<ToolId | null>(null);
   const [helpOpen, setHelpOpen] = useState(false);
   const [demoBusy, setDemoBusy] = useState(false);
   const [demoError, setDemoError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const openInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!toast) return;
@@ -100,6 +128,72 @@ export default function App() {
       setDemoBusy(false);
     }
   };
+
+  useEffect(() => {
+    void loadAutosave().then((saved) => {
+      const state = useEditor.getState();
+      if (saved && saved.project.clips.length && state.clips.length === 0 && state.assets.length === 0) {
+        loadProject(saved.project);
+        setToast(
+          saved.missing ? `Restored autosave — ${saved.missing} media file(s) missing` : 'Restored autosaved project',
+        );
+      }
+    });
+  }, [loadProject]);
+
+  useEffect(() => {
+    const id = window.setTimeout(() => autosaveProject(useEditor.getState()), 900);
+    return () => window.clearTimeout(id);
+  }, [name, settings, tracks, clips, assets]);
+
+  const handleTool = (next: ToolId) => {
+    if (next === 'nodes') {
+      setActivePage('fusion');
+      setTool(null);
+    } else if (next === 'timeline' || next === 'clips') {
+      setActivePage('edit');
+      if (next === 'clips') setInspectorTab('clip');
+      setTool(null);
+    } else if (next === 'media') {
+      setActivePage('media');
+      setTool(null);
+    } else if (next === 'settings') {
+      setActivePage('deliver');
+      setInspectorTab('export');
+      setTool(null);
+      setToast('Project and export settings are in the Deliver inspector');
+    } else {
+      setTool(next);
+      setPanel('tool');
+    }
+  };
+
+  const handleSave = async () => {
+    try {
+      setToast(`Saved ${await saveProjectFile(useEditor.getState())}`);
+    } catch (err) {
+      setToast(`Save failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
+
+  const handleOpen = async (file: File) => {
+    try {
+      const { project, missing } = await openProjectFile(file);
+      loadProject(project);
+      setToast(missing ? `Opened project — ${missing} media file(s) missing` : 'Project opened');
+    } catch (err) {
+      setToast(`Open failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
+
+  const toolPanel =
+    tool === 'luts' ? (
+      <LutPanel />
+    ) : tool === 'openfx' ? (
+      <EffectsPanel />
+    ) : tool ? (
+      <MediaPanel className="h-full" />
+    ) : null;
 
   const clipCount = clips.length;
 
@@ -162,6 +256,7 @@ export default function App() {
             onClick={() => {
               if (window.confirm('Clear the timeline, media pool and undo history?')) {
                 reset();
+                clearAutosave();
                 setToast('Project cleared');
               }
             }}
@@ -191,6 +286,23 @@ export default function App() {
         </div>
       </header>
 
+      <PageNav
+        onTool={handleTool}
+        onSave={handleSave}
+        onOpen={() => openInputRef.current?.click()}
+      />
+      <input
+        ref={openInputRef}
+        type="file"
+        accept=".json,application/json"
+        className="hidden"
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (file) void handleOpen(file);
+          e.target.value = '';
+        }}
+      />
+
       {demoError && (
         <div className="flex items-center gap-2 border-b border-red-500/30 bg-red-500/10 px-3 py-1.5 text-[11px] text-red-300">
           <span className="flex-1">Demo clip failed: {demoError}</span>
@@ -205,12 +317,34 @@ export default function App() {
         <MediaPanel className="hidden w-[250px] shrink-0 border-r lg:flex xl:w-[280px]" />
 
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-          <Preview />
+          {activePage === 'fusion' ? (
+            <NodeEditor className="min-h-0 flex-1" />
+          ) : activePage === 'fairlight' ? (
+            <AudioMixer className="min-h-0 flex-1" />
+          ) : (
+            <Preview />
+          )}
           <Timeline className="h-[42%] min-h-[192px] shrink-0 md:h-[40%]" />
         </div>
 
         <div className="hidden w-[292px] shrink-0 border-l border-ink-700 lg:block xl:w-[330px]">
-          <Inspector />
+          {tool ? (
+            <div className="flex h-full flex-col">
+              <div className="flex h-8 shrink-0 items-center justify-between border-b border-ink-700 bg-ink-850 px-2">
+                <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-zinc-400">
+                  {TOOL_TITLES[tool] ?? tool}
+                </span>
+                <button className="icon-btn h-6 w-6" onClick={() => setTool(null)} title="Close tool">
+                  <X size={13} />
+                </button>
+              </div>
+              <div className="min-h-0 flex-1">{toolPanel}</div>
+            </div>
+          ) : activePage === 'color' ? (
+            <ColorPanel />
+          ) : (
+            <Inspector />
+          )}
         </div>
       </div>
 
@@ -225,14 +359,28 @@ export default function App() {
           <section className="absolute inset-x-0 bottom-0 top-[10%] flex flex-col overflow-hidden rounded-t-2xl border-t border-ink-600 bg-ink-850 shadow-2xl">
             <div className="flex items-center justify-between border-b border-ink-700 px-3 py-2">
               <span className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-400">
-                {panel === 'media' ? 'Media pool' : 'Inspector'}
+                {panel === 'media'
+                  ? 'Media pool'
+                  : panel === 'tool'
+                    ? (TOOL_TITLES[tool ?? 'gallery'] ?? 'Tool')
+                    : activePage === 'color'
+                      ? 'Color'
+                      : 'Inspector'}
               </span>
               <button className="icon-btn h-7 w-7" onClick={() => setPanel(null)}>
                 <X size={15} />
               </button>
             </div>
             <div className="min-h-0 flex-1">
-              {panel === 'media' ? <MediaPanel className="flex h-full" /> : <Inspector />}
+              {panel === 'media' ? (
+                <MediaPanel className="flex h-full" />
+              ) : panel === 'tool' ? (
+                toolPanel
+              ) : activePage === 'color' ? (
+                <ColorPanel />
+              ) : (
+                <Inspector />
+              )}
             </div>
           </section>
         </div>

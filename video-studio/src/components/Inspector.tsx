@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import {
   Download,
   Film,
+  KeyRound,
   Loader2,
   Mic,
   Palette,
@@ -12,17 +13,23 @@ import {
   Video,
   Volume2,
   Wand2,
+  Waves,
 } from 'lucide-react';
 import clsx from 'clsx';
-import { useEditor } from '../store/editorStore';
+import { useEditor, type InspectorTab } from '../store/editorStore';
 import {
   DEFAULT_POWER_WINDOW,
   RESOLUTIONS,
+  type AudioFilter,
+  type EffectInstance,
+  type EffectType,
   type ExportOptions,
   type PowerWindow,
   type TextAnimation,
+  type Transform,
 } from '../types';
 import { exportProject, estimateExportSizeMb, getFFmpeg } from '../lib/export';
+import { EFFECTS, EFFECT_LABELS, TRANSITIONS } from '../lib/catalog';
 import {
   transcribe,
   captioningSupported,
@@ -50,7 +57,7 @@ const animations: { value: TextAnimation; label: string }[] = [
   { value: 'typewriter', label: 'Typewriter' },
 ];
 
-type Tab = 'clip' | 'text' | 'color' | 'power' | 'captions' | 'export';
+type Tab = InspectorTab;
 
 export function Inspector() {
   const clips = useEditor((s) => s.clips);
@@ -59,6 +66,12 @@ export function Inspector() {
   const settings = useEditor((s) => s.settings);
   const selectedClipId = useEditor((s) => s.selectedClipId);
   const updateClip = useEditor((s) => s.updateClip);
+  const addEffect = useEditor((s) => s.addEffect);
+  const updateEffect = useEditor((s) => s.updateEffect);
+  const removeEffect = useEditor((s) => s.removeEffect);
+  const addKeyframe = useEditor((s) => s.addKeyframe);
+  const removeKeyframe = useEditor((s) => s.removeKeyframe);
+  const updateTrack = useEditor((s) => s.updateTrack);
   const addTextClip = useEditor((s) => s.addTextClip);
   const addCaptionClips = useEditor((s) => s.addCaptionClips);
   const setSettings = useEditor((s) => s.setSettings);
@@ -99,7 +112,8 @@ export function Inspector() {
     updateClip(clip.id, { windows: [...(clip.windows ?? []), nextWindow] });
   };
 
-  const [tab, setTab] = useState<Tab>('clip');
+  const tab = useEditor((s) => s.inspectorTab);
+  const setTab = useEditor((s) => s.setInspectorTab);
 
   const [exporting, setExporting] = useState(false);
   const [exportLog, setExportLog] = useState<string[]>([]);
@@ -120,6 +134,7 @@ export function Inspector() {
     videoBitrate: '8000k',
     preset: 'fast',
     format: 'mp4',
+    codec: 'h264',
   });
 
   const duration = useMemo(
@@ -169,7 +184,9 @@ export function Inspector() {
     { id: 'clip', icon: Video, label: 'Clip' },
     { id: 'text', icon: Type, label: 'Text' },
     { id: 'color', icon: Palette, label: 'Color' },
-    { id: 'power', icon: Wand2, label: 'Power Windows' },
+    { id: 'power', icon: Wand2, label: 'Windows' },
+    { id: 'fx', icon: Sparkles, label: 'FX' },
+    { id: 'audio', icon: Waves, label: 'Audio' },
     { id: 'captions', icon: Mic, label: 'Captions' },
     { id: 'export', icon: Download, label: 'Export' },
   ];
@@ -185,7 +202,7 @@ export function Inspector() {
         )}
       </div>
 
-      <div className="grid grid-cols-6 gap-1 border-b border-ink-700 px-2 py-1">
+      <div className="grid grid-cols-4 gap-1 border-b border-ink-700 px-2 py-1">
         {tabs.map((item) => (
           <button
             key={item.id}
@@ -311,6 +328,46 @@ export function Inspector() {
                   value={clip.transform.y}
                   onChange={(v) => updateClip(clip.id, { transform: { ...clip.transform, y: v } })}
                 />
+
+                <div className="flex gap-1.5">
+                  <button
+                    className={clsx('btn flex-1', clip.transform.flipX && 'border-accent/60 text-accent')}
+                    onClick={() =>
+                      updateClip(clip.id, {
+                        transform: { ...clip.transform, flipX: !clip.transform.flipX },
+                      })
+                    }
+                  >
+                    Flip H
+                  </button>
+                  <button
+                    className={clsx('btn flex-1', clip.transform.flipY && 'border-accent/60 text-accent')}
+                    onClick={() =>
+                      updateClip(clip.id, {
+                        transform: { ...clip.transform, flipY: !clip.transform.flipY },
+                      })
+                    }
+                  >
+                    Flip V
+                  </button>
+                </div>
+
+                <p className="label mb-0 pt-1">Crop</p>
+                <div className="grid grid-cols-2 gap-x-2">
+                  {(['cropTop', 'cropRight', 'cropBottom', 'cropLeft'] as const).map((key) => (
+                    <Slider
+                      key={key}
+                      label={key.replace('crop', '')}
+                      min={0}
+                      max={0.45}
+                      step={0.01}
+                      value={clip.transform[key]}
+                      onChange={(v) =>
+                        updateClip(clip.id, { transform: { ...clip.transform, [key]: v } })
+                      }
+                    />
+                  ))}
+                </div>
               </div>
 
               <div className="space-y-2 border-t border-ink-700 pt-3">
@@ -357,11 +414,11 @@ export function Inspector() {
                     }
                   >
                     <option value="none">None</option>
-                    <option value="fade">Cross fade</option>
-                    <option value="dip">Dip to black</option>
-                    <option value="slide-left">Slide from right</option>
-                    <option value="slide-right">Slide from left</option>
-                    <option value="wipe">Wipe</option>
+                    {TRANSITIONS.map((t) => (
+                      <option key={t.value} value={t.value}>
+                        {t.label}
+                      </option>
+                    ))}
                   </select>
                   <input
                     type="number"
@@ -377,10 +434,45 @@ export function Inspector() {
                     className="field w-16 text-center"
                   />
                 </div>
-                {clip.transitionIn.type === 'wipe' && (
+                {clip.transitionIn.type !== 'none' && clip.transitionIn.type !== 'fade' && (
                   <p className="text-[10px] text-amber-500/80">
-                    Wipe renders in the preview; export approximates it as a fade.
+                    Wipes and shape transitions are rendered exactly in the preview; export falls back to a
+                    fade for the affected frames.
                   </p>
+                )}
+              </div>
+
+              <div className="space-y-2 border-t border-ink-700 pt-3">
+                <div className="flex items-center justify-between">
+                  <p className="label mb-0">Keyframes</p>
+                  <button className="btn h-6" onClick={() => addKeyframe(clip.id)}>
+                    <KeyRound size={11} /> Add at playhead
+                  </button>
+                </div>
+                {(clip.keyframes ?? []).length === 0 ? (
+                  <p className="text-[10px] text-zinc-500">
+                    Animate position, scale, rotation, opacity and crop across the clip.
+                  </p>
+                ) : (
+                  <div className="space-y-1">
+                    {(clip.keyframes ?? []).map((kf) => (
+                      <div
+                        key={kf.id}
+                        className="flex items-center justify-between rounded border border-ink-700 bg-ink-800 px-2 py-1"
+                      >
+                        <span className="font-mono text-[10px] text-zinc-400">
+                          {Math.round(kf.t * 100)}% · scale {Number(kf.transform.scale ?? 1).toFixed(2)} · x{' '}
+                          {Number(kf.transform.x ?? 0).toFixed(2)}
+                        </span>
+                        <button
+                          className="text-zinc-500 transition hover:text-red-400"
+                          onClick={() => removeKeyframe(clip.id, kf.id)}
+                        >
+                          <Trash2 size={11} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
                 )}
               </div>
             </div>
@@ -819,6 +911,245 @@ export function Inspector() {
             </div>
           ))}
 
+        {/* ---------------- FX ---------------- */}
+        {tab === 'fx' &&
+          (!clip || clip.text ? (
+            <EmptyState icon={<Sparkles size={18} />} text="Select a video clip to add OpenFX" />
+          ) : (
+            <div className="space-y-3 p-3">
+              <div className="flex gap-1.5">
+                <select
+                  className="field flex-1"
+                  defaultValue=""
+                  onChange={(e) => {
+                    if (!e.target.value) return;
+                    addEffect(clip.id, e.target.value as EffectType);
+                    e.target.value = '';
+                  }}
+                >
+                  <option value="">Add OpenFX…</option>
+                  {EFFECTS.map((fx) => (
+                    <option key={fx.value} value={fx.value}>
+                      {fx.category} — {fx.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {(clip.effectsList ?? []).length === 0 && (
+                <p className="py-6 text-center text-[11px] text-zinc-500">
+                  No effects. Add a ResolveFX Generate, Light or Refine node, or use the Effects library.
+                </p>
+              )}
+
+              {(clip.effectsList ?? []).map((fx) => (
+                <div key={fx.id} className="space-y-2 rounded-md border border-ink-700 bg-ink-800 p-2.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="truncate text-[11px] font-semibold text-zinc-300">
+                      {EFFECT_LABELS[fx.type] ?? fx.type}
+                    </span>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        className={clsx(
+                          'rounded px-1 py-0.5 text-[9px]',
+                          fx.parallel ? 'bg-sky-500/20 text-sky-300' : 'bg-ink-700 text-zinc-500',
+                        )}
+                        onClick={() => updateEffect(clip.id, fx.id, { parallel: !fx.parallel })}
+                        title="Parallel branch"
+                      >
+                        ∥
+                      </button>
+                      <label className="flex items-center gap-1 text-[9px] text-zinc-500">
+                        <input
+                          type="checkbox"
+                          checked={fx.enabled}
+                          onChange={(e) => updateEffect(clip.id, fx.id, { enabled: e.target.checked })}
+                          className="accent-[var(--color-accent)]"
+                        />
+                        On
+                      </label>
+                      <button
+                        className="text-zinc-500 transition hover:text-red-400"
+                        onClick={() => removeEffect(clip.id, fx.id)}
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                    </div>
+                  </div>
+
+                  {effectParams(fx).map((param) => (
+                    <Slider
+                      key={param.key}
+                      label={param.label}
+                      min={param.min}
+                      max={param.max}
+                      step={param.step}
+                      value={fx.params[param.key] ?? param.fallback}
+                      suffix={param.suffix}
+                      onChange={(v) =>
+                        updateEffect(clip.id, fx.id, { params: { ...fx.params, [param.key]: v } })
+                      }
+                    />
+                  ))}
+                </div>
+              ))}
+
+              <p className="text-[9px] leading-relaxed text-zinc-600">
+                Preview renders glow, flares, rays, grids, vignettes and grain natively on canvas. Export maps
+                blur, sharpen, vignette and grain to ffmpeg filters.
+              </p>
+            </div>
+          ))}
+
+        {/* ---------------- AUDIO ---------------- */}
+        {tab === 'audio' && (
+          <div className="space-y-3 p-3">
+            {!clip ? (
+              <EmptyState icon={<Waves size={18} />} text="Select a clip to edit audio" />
+            ) : (
+              <>
+                <div>
+                  <p className="label">Clip gain</p>
+                  <div className="flex items-center gap-2">
+                    <Volume2 size={13} className="text-zinc-500" />
+                    <input
+                      type="range"
+                      min={0}
+                      max={2}
+                      step={0.01}
+                      value={clip.volume}
+                      onChange={(e) => updateClip(clip.id, { volume: Number(e.target.value) })}
+                      className="flex-1"
+                    />
+                    <span className="w-10 text-right font-mono text-[11px] text-zinc-300">
+                      {Math.round(clip.volume * 100)}%
+                    </span>
+                  </div>
+                  <label className="mt-2 flex items-center gap-2 text-[11px] text-zinc-400">
+                    <input
+                      type="checkbox"
+                      checked={clip.muted}
+                      onChange={(e) => updateClip(clip.id, { muted: e.target.checked })}
+                      className="accent-[var(--color-accent)]"
+                    />
+                    Mute clip
+                  </label>
+                </div>
+
+                <div className="space-y-2 border-t border-ink-700 pt-3">
+                  <p className="label mb-0">Equalizer</p>
+                  {(['eqLow', 'eqMid', 'eqHigh'] as const).map((key) => (
+                    <Slider
+                      key={key}
+                      label={key === 'eqLow' ? 'Low (120 Hz)' : key === 'eqMid' ? 'Mid (1 kHz)' : 'High (6 kHz)'}
+                      min={-12}
+                      max={12}
+                      step={0.5}
+                      value={clip.audio?.[key] ?? 0}
+                      suffix=" dB"
+                      onChange={(v) =>
+                        updateClip(clip.id, {
+                          audio: { ...(clip.audio ?? ({} as AudioFilter)), [key]: v },
+                        })
+                      }
+                    />
+                  ))}
+                </div>
+
+                <div className="space-y-2 border-t border-ink-700 pt-3">
+                  <p className="label mb-0">Cleanup</p>
+                  <Slider
+                    label="Noise reduction"
+                    min={0}
+                    max={1}
+                    step={0.01}
+                    value={clip.audio?.noiseReduction ?? 0}
+                    onChange={(v) =>
+                      updateClip(clip.id, { audio: { ...clip.audio, noiseReduction: v } })
+                    }
+                  />
+                  <Slider
+                    label="Voice enhancement"
+                    min={0}
+                    max={1}
+                    step={0.01}
+                    value={clip.audio?.voiceEnhance ?? 0}
+                    onChange={(v) =>
+                      updateClip(clip.id, { audio: { ...clip.audio, voiceEnhance: v } })
+                    }
+                  />
+                  <Slider
+                    label="Pitch"
+                    min={-12}
+                    max={12}
+                    step={1}
+                    value={clip.audio?.pitch ?? 0}
+                    suffix=" st"
+                    onChange={(v) => updateClip(clip.id, { audio: { ...clip.audio, pitch: v } })}
+                  />
+                </div>
+
+                <div className="flex flex-wrap gap-1">
+                  {[
+                    { label: 'Dialogue', audio: { eqLow: -2, eqMid: 2, eqHigh: 3, noiseReduction: 0.25, voiceEnhance: 0.5, pitch: 0 } },
+                    { label: 'Podcast', audio: { eqLow: 2, eqMid: 1, eqHigh: -1, noiseReduction: 0.2, voiceEnhance: 0.3, pitch: 0 } },
+                    { label: 'Music', audio: { eqLow: 1, eqMid: 0, eqHigh: 1, noiseReduction: 0, voiceEnhance: 0, pitch: 0 } },
+                    { label: 'Reset', audio: { eqLow: 0, eqMid: 0, eqHigh: 0, noiseReduction: 0, voiceEnhance: 0, pitch: 0 } },
+                  ].map((preset) => (
+                    <button
+                      key={preset.label}
+                      className="rounded border border-ink-600 px-1.5 py-0.5 text-[9px] text-zinc-400 transition hover:border-accent/50 hover:text-zinc-100"
+                      onClick={() => updateClip(clip.id, { audio: { ...clip.audio, ...preset.audio } })}
+                    >
+                      {preset.label}
+                    </button>
+                  ))}
+                </div>
+
+                {(() => {
+                  const track = tracks.find((t) => t.id === clip.trackId);
+                  if (!track || track.kind !== 'audio') return null;
+                  return (
+                    <div className="space-y-2 border-t border-ink-700 pt-3">
+                      <p className="label mb-0">Track · {track.name}</p>
+                      <div className="flex items-center gap-2">
+                        <button
+                          className={clsx('btn flex-1', track.muted && 'border-red-500/50 text-red-300')}
+                          onClick={() => updateTrack(track.id, { muted: !track.muted })}
+                        >
+                          {track.muted ? 'Unmute' : 'Mute'}
+                        </button>
+                        <button
+                          className={clsx('btn flex-1', track.solo && 'border-amber-500/50 text-amber-300')}
+                          onClick={() => updateTrack(track.id, { solo: !track.solo })}
+                        >
+                          {track.solo ? 'Unsolo' : 'Solo'}
+                        </button>
+                      </div>
+                      <Slider
+                        label="Track volume"
+                        min={0}
+                        max={1.5}
+                        step={0.01}
+                        value={track.volume}
+                        onChange={(v) => updateTrack(track.id, { volume: v })}
+                      />
+                      <Slider
+                        label="Pan"
+                        min={-1}
+                        max={1}
+                        step={0.01}
+                        value={track.pan ?? 0}
+                        onChange={(v) => updateTrack(track.id, { pan: v })}
+                      />
+                    </div>
+                  );
+                })()}
+              </>
+            )}
+          </div>
+        )}
+
         {/* ---------------- CAPTIONS ---------------- */}
         {tab === 'captions' && (
           <div className="space-y-3 p-3">
@@ -997,8 +1328,32 @@ export function Inspector() {
   );
 }
 
-function EmptyState({ icon, text }: { icon: React.ReactNode; text: string }) {
-  return (
+interface ParamSpec {
+  key: string;
+  label: string;
+  min: number;
+  max: number;
+  step: number;
+  fallback: number;
+  suffix?: string;
+}
+
+function effectParams(fx: EffectInstance): ParamSpec[] {
+  switch (fx.type) {
+    case 'color-generator':
+      return [{ key: 'hue', label: 'Hue', min: 0, max: 360, step: 1, fallback: 200, suffix: '°' }];
+    case 'color-palette':
+      return [{ key: 'hue', label: 'Hue shift', min: 0, max: 360, step: 1, fallback: 0, suffix: '°' }];
+    case 'grid':
+      return [{ key: 'size', label: 'Grid size', min: 8, max: 160, step: 1, fallback: 48, suffix: 'px' }];
+    case 'alpha-shrink-grow':
+      return [{ key: 'amount', label: 'Shrink / grow', min: -1, max: 1, step: 0.01, fallback: 0 }];
+    default:
+      return [{ key: 'amount', label: 'Amount', min: 0, max: 1, step: 0.01, fallback: 0.5 }];
+  }
+}
+
+function EmptyState({ icon, text }: { icon: React.ReactNode; text: string }) {  return (
     <div className="py-10 text-center">
       <div className="mx-auto mb-2 text-zinc-600">{icon}</div>
       <p className="text-xs text-zinc-500">{text}</p>

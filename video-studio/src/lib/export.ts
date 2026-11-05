@@ -2,6 +2,9 @@ import { FFmpeg } from '@ffmpeg/ffmpeg';
 import { toBlobURL } from '@ffmpeg/util';
 import type { Clip, ExportOptions, MediaAsset, PowerWindow, Project } from '../types';
 import { drawTextLayer } from './textRender';
+import { isGradeIdentity, wheelsToFFmpeg, curvesToFFmpeg } from './color';
+import { effectsToFFmpeg } from './effects';
+import { drawGenerator } from './generators';
 
 let instance: FFmpeg | null = null;
 let loading: Promise<FFmpeg> | null = null;
@@ -83,6 +86,17 @@ function chromaFilter(clip: Clip): string[] {
   const similarity = clamp(clip.chroma.similarity, 0.01, 1).toFixed(3);
   const blend = clamp(clip.chroma.blend, 0.001, 1).toFixed(3);
   return [`colorkey=${key}:${similarity}:${blend}`];
+}
+
+/** Re-emit a parsed LUT as .cube text for ffmpeg's lut3d filter. */
+function lutToCubeText(lut: { name: string; size: number; data: number[] }): string {
+  const lines = [`TITLE "${lut.name}"`, `LUT_3D_SIZE ${lut.size}`, 'DOMAIN_MIN 0 0 0', 'DOMAIN_MAX 1 1 1'];
+  for (let i = 0; i < lut.data.length; i += 3) {
+    lines.push(
+      `${lut.data[i].toFixed(6)} ${lut.data[i + 1].toFixed(6)} ${lut.data[i + 2].toFixed(6)}`,
+    );
+  }
+  return lines.join('\n');
 }
 
 /* ------------------------------------------------------------------ *
@@ -292,35 +306,100 @@ export async function exportProject(
   for (let i = videoTracks.length - 1; i >= 0; i--) {
     const track = videoTracks[i];
     const clips = project.clips
-      .filter((c) => c.trackId === track.id && c.assetId)
+      .filter(
+        (c) =>
+          c.trackId === track.id &&
+          !track.muted &&
+          (c.assetId || (c.generator && c.generator !== 'none')),
+      )
       .sort((a, b) => a.start - b.start);
     orderedVideoClips.push(...clips);
   }
 
   onProgress({ stage: 'preparing', ratio: 0.08, message: 'Building filter graph' });
 
+  // Generators are rasterised once and looped for the clip duration.
+  const generatorFiles: string[] = [];
+  const lutFiles: string[] = [];
   for (const clip of orderedVideoClips) {
-    const asset = assets.get(clip.assetId!);
-    if (!asset) continue;
-    const idx = inputLabel.get(clip.assetId!)!;
+    if (clip.assetId || !clip.generator || clip.generator === 'none') continue;
+    const { canvas, ctx } = make2D(W, H);
+    drawGenerator(ctx, clip.generator, W, H);
+    const name = `gen_${clip.id}.png`;
+    await ff.writeFile(name, await toPngBlob(canvas));
+    generatorFiles.push(name);
+    inputArgs.push('-loop', '1', '-t', String(Math.ceil(clip.duration) + 1), '-i', name);
+    inputLabel.set(`gen:${clip.id}`, inputCursor++);
+  }
+
+  for (const clip of orderedVideoClips) {
+    const isGenerator = !clip.assetId && !!clip.generator && clip.generator !== 'none';
+    const asset = clip.assetId ? assets.get(clip.assetId) : null;
+    if (!isGenerator && !asset) continue;
+    const idx = inputLabel.get(isGenerator ? `gen:${clip.id}` : clip.assetId!)!;
     const label = `v${counter++}`;
 
-    const trimEnd = clip.inPoint + clip.duration * clip.speed;
-    const chain: string[] = [
-      `[${idx}:v]trim=start=${clip.inPoint.toFixed(3)}:end=${trimEnd.toFixed(3)}`,
-      'setpts=PTS-STARTPTS',
+    const chain: string[] = [];
+    if (isGenerator) {
+      chain.push(`[${idx}:v]trim=start=0:end=${clip.duration.toFixed(3)}`, 'setpts=PTS-STARTPTS');
+    } else {
+      const trimEnd = clip.inPoint + clip.duration * clip.speed;
+      chain.push(`[${idx}:v]trim=start=${clip.inPoint.toFixed(3)}:end=${trimEnd.toFixed(3)}`, 'setpts=PTS-STARTPTS');
+    }
+    if (clip.transform.flipX) chain.push('hflip');
+    if (clip.transform.flipY) chain.push('vflip');
+    const ct = clip.transform;
+    if (
+      (ct.cropTop ?? 0) + (ct.cropBottom ?? 0) + (ct.cropLeft ?? 0) + (ct.cropRight ?? 0) >
+      0.001
+    ) {
+      chain.push(
+        `crop=iw*(1-${(ct.cropLeft ?? 0).toFixed(3)}-${(ct.cropRight ?? 0).toFixed(3)}):ih*(1-${(ct.cropTop ?? 0).toFixed(3)}-${(ct.cropBottom ?? 0).toFixed(3)}):iw*${(ct.cropLeft ?? 0).toFixed(3)}:ih*${(ct.cropTop ?? 0).toFixed(3)}`,
+      );
+    }
+    chain.push(
       `fps=${fps}`,
       `scale=${W}:${H}:force_original_aspect_ratio=decrease`,
       `pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2:color=black@0`,
       'format=rgba',
-    ];
+    );
 
-    if (clip.speed !== 1) chain.push(`setpts=PTS/${clip.speed.toFixed(4)}`);
+    if (!isGenerator && clip.speed !== 1) chain.push(`setpts=PTS/${clip.speed.toFixed(4)}`);
     chain.push(...colourFilters(clip));
+    if (!isGradeIdentity(clip.wheels, clip.curves)) {
+      chain.push(...wheelsToFFmpeg(clip.wheels), ...curvesToFFmpeg(clip.curves));
+    }
+    if (clip.lut) {
+      const lutName = `lut_${clip.id}.cube`;
+      await ff.writeFile(lutName, new TextEncoder().encode(lutToCubeText(clip.lut)));
+      lutFiles.push(lutName);
+      chain.push(`lut3d=file=${lutName}`);
+    }
+    if (clip.effectsList.length > 0) chain.push(...effectsToFFmpeg(clip.effectsList));
     chain.push(...chromaFilter(clip));
 
     const fade = clip.transitionIn;
-    if (fade.type === 'fade' || fade.type === 'dip') {
+    const dissolveTypes = [
+      'fade',
+      'dip',
+      'cross-dissolve',
+      'additive-dissolve',
+      'dip-to-color',
+      'center-wipe',
+      'clock-wipe',
+      'edge-wipe',
+      'venetian-blind',
+      'cross-iris',
+      'diamond-iris',
+      'oval-iris',
+      '5-star',
+      'box',
+      'heart',
+      'triangle-left',
+      'triangle-right',
+      'wipe',
+    ];
+    if (dissolveTypes.includes(fade.type)) {
       chain.push(
         `fade=t=in:st=${clip.start.toFixed(3)}:d=${Math.min(fade.duration, clip.duration).toFixed(3)}:alpha=1`,
       );
@@ -381,12 +460,16 @@ export async function exportProject(
   }
 
   // Audio
+  const audioTracks = project.tracks.filter((t) => t.kind === 'audio');
+  const anySolo = audioTracks.some((t) => t.solo);
   const audioClips = project.clips.filter((c) => {
     if (!c.assetId) return false;
     const asset = assets.get(c.assetId);
     if (!asset || !asset.hasAudio || asset.kind === 'image') return false;
     const track = project.tracks.find((t) => t.id === c.trackId);
-    return !c.muted && !track?.muted && c.volume > 0;
+    if (c.muted || track?.muted) return false;
+    if (anySolo && track?.kind === 'audio' && !track.solo) return false;
+    return c.volume > 0;
   });
 
   const audioLabels: string[] = [];
@@ -397,9 +480,27 @@ export async function exportProject(
       `[${idx}:a]atrim=start=${clip.inPoint.toFixed(3)}:end=${(clip.inPoint + clip.duration * clip.speed).toFixed(3)}`,
       'asetpts=PTS-STARTPTS',
       ...atempoChain(clip.speed),
+    ];
+    const af = clip.audio;
+    if (af) {
+      if (Math.abs(af.eqLow) > 0.01) parts.push(`bass=g=${af.eqLow.toFixed(2)}:f=120`);
+      if (Math.abs(af.eqMid) > 0.01) parts.push(`equalizer=f=1000:width_type=o:width=1.5:g=${af.eqMid.toFixed(2)}`);
+      if (Math.abs(af.eqHigh) > 0.01) parts.push(`treble=g=${af.eqHigh.toFixed(2)}:f=6000`);
+      if (af.noiseReduction > 0.01) parts.push(`afftdn=nf=${(-20 - af.noiseReduction * 25).toFixed(1)}`);
+      if (af.voiceEnhance > 0.01) {
+        parts.push('highpass=f=90', 'lowpass=f=9000');
+        parts.push(`equalizer=f=2600:width_type=o:width=1.2:g=${(af.voiceEnhance * 5).toFixed(2)}`);
+        parts.push(`acompressor=threshold=${(0.25 - af.voiceEnhance * 0.15).toFixed(3)}:ratio=${(2 + af.voiceEnhance * 2).toFixed(2)}`);
+      }
+      if (Math.abs(af.pitch) > 0.01) {
+        const ratio = Math.pow(2, af.pitch / 12);
+        parts.push(`asetrate=48000*${ratio.toFixed(4)}`, 'aresample=48000', `atempo=${(1 / ratio).toFixed(4)}`);
+      }
+    }
+    parts.push(
       `volume=${(clip.volume * (project.tracks.find((t) => t.id === clip.trackId)?.volume ?? 1)).toFixed(3)}`,
       `adelay=${Math.round(clip.start * 1000)}|${Math.round(clip.start * 1000)}`,
-    ];
+    );
     if (clip.effects.fadeIn > 0) parts.push(`afade=t=in:st=0:d=${clip.effects.fadeIn.toFixed(3)}`);
     if (clip.effects.fadeOut > 0) {
       parts.push(`afade=t=out:st=${(clip.duration - clip.effects.fadeOut).toFixed(3)}:d=${clip.effects.fadeOut.toFixed(3)}`);
@@ -442,7 +543,18 @@ export async function exportProject(
   const codec: string[] =
     options.format === 'webm'
       ? ['-c:v', 'libvpx-vp9', '-b:v', options.videoBitrate, '-deadline', 'realtime', '-cpu-used', '8', '-c:a', 'libvorbis']
-      : ['-c:v', 'libx264', '-preset', options.preset, '-b:v', options.videoBitrate, '-c:a', 'aac', '-b:a', '192k'];
+      : [
+          '-c:v',
+          options.codec === 'h265' ? 'libx265' : 'libx264',
+          '-preset',
+          options.preset,
+          '-b:v',
+          options.videoBitrate,
+          '-c:a',
+          'aac',
+          '-b:a',
+          '192k',
+        ];
 
   try {
     await ff.exec([
@@ -470,7 +582,7 @@ export async function exportProject(
 
   onProgress({ stage: 'finalising', ratio: 0.95, message: 'Reading output' });
   const data = (await ff.readFile(outputName)) as Uint8Array;
-  const mime = options.format === 'webm' ? 'video/webm' : 'video/mp4';
+  const mime = options.format === 'webm' ? 'video/webm' : options.format === 'mov' ? 'video/quicktime' : 'video/mp4';
   const blob = new Blob([data.slice().buffer as ArrayBuffer], { type: mime });
   const url = URL.createObjectURL(blob);
 
@@ -482,6 +594,12 @@ export async function exportProject(
     }
     for (const clip of textClips) {
       await ff.deleteFile(`txt_${clip.id}.png`);
+    }
+    for (const name of generatorFiles) {
+      await ff.deleteFile(name);
+    }
+    for (const name of lutFiles) {
+      await ff.deleteFile(name);
     }
   } catch {
     /* best effort */

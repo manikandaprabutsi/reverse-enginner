@@ -1,8 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Maximize2, Minimize2, Pause, Play, SkipBack, SkipForward, Volume2, VolumeX } from 'lucide-react';
+import {
+  Maximize2,
+  Minimize2,
+  Pause,
+  Play,
+  Repeat,
+  SkipBack,
+  SkipForward,
+  Volume2,
+  VolumeX,
+} from 'lucide-react';
 import { useEditor, useProjectDuration } from '../store/editorStore';
 import { Compositor } from '../lib/compositor';
 import { formatTime } from '../lib/time';
+import { setPreviewCanvas } from '../lib/previewCanvas';
 
 export function Preview() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -21,6 +32,8 @@ export function Preview() {
   const duration = useProjectDuration();
   const [muted, setMuted] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
+  const [loop, setLoop] = useState(false);
+  const [speed, setSpeed] = useState(1);
 
   const assetMap = useMemo(() => new Map(assets.map((a) => [a.id, a])), [assets]);
 
@@ -37,7 +50,9 @@ export function Preview() {
     if (!canvasRef.current) return;
     const comp = new Compositor(canvasRef.current);
     compRef.current = comp;
+    setPreviewCanvas(canvasRef.current);
     return () => {
+      setPreviewCanvas(null);
       comp.dispose();
       compRef.current = null;
     };
@@ -74,13 +89,17 @@ export function Preview() {
     const tick = (now: number) => {
       const dt = Math.min(0.25, (now - last) / 1000);
       last = now;
-      time += dt;
+      time += dt * speed;
 
       if (time >= total) {
-        setPlayhead(total);
-        setPlaying(false);
-        compRef.current?.pauseAll();
-        return;
+        if (loop) {
+          time = 0;
+        } else {
+          setPlayhead(total);
+          setPlaying(false);
+          compRef.current?.pauseAll();
+          return;
+        }
       }
 
       const comp = compRef.current;
@@ -99,7 +118,7 @@ export function Preview() {
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [playing, duration]);
+  }, [playing, duration, loop, speed]);
 
   const toggleFullscreen = async () => {
     const el = wrapRef.current;
@@ -172,6 +191,27 @@ export function Preview() {
         <button className="icon-btn" onClick={() => setPlayhead(duration)} title="Go to end">
           <SkipForward size={15} />
         </button>
+
+        <button
+          className={loop ? 'icon-btn text-accent' : 'icon-btn'}
+          onClick={() => setLoop((v) => !v)}
+          title="Loop playback"
+        >
+          <Repeat size={14} />
+        </button>
+
+        <select
+          className="hidden rounded border border-ink-600 bg-ink-800 px-1 py-0.5 font-mono text-[10px] text-zinc-300 sm:block"
+          value={speed}
+          onChange={(e) => setSpeed(Number(e.target.value))}
+          title="Playback speed"
+        >
+          {[0.25, 0.5, 1, 1.5, 2, 4].map((s) => (
+            <option key={s} value={s}>
+              {s}×
+            </option>
+          ))}
+        </select>
 
         <div className="ml-1 font-mono text-xs tabular-nums text-zinc-300">
           <span className="text-accent">{formatTime(playhead, settings.fps)}</span>

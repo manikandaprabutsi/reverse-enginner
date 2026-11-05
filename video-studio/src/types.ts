@@ -23,9 +23,12 @@ export interface Track {
   kind: TrackKind;
   name: string;
   muted: boolean;
+  solo: boolean;
   locked: boolean;
   /** per-track gain (1 = unity), used for mixing down to the master */
   volume: number;
+  /** -1 = hard left, 0 = centre, 1 = hard right */
+  pan?: number;
 }
 
 export interface Transform {
@@ -35,6 +38,104 @@ export interface Transform {
   rotation: number; // degrees
   opacity: number; // 0..1
   fit: 'contain' | 'cover' | 'stretch';
+  flipX: boolean;
+  flipY: boolean;
+  /** crop fractions per edge, 0..0.45 */
+  cropTop: number;
+  cropRight: number;
+  cropBottom: number;
+  cropLeft: number;
+}
+
+/** -1..1 per channel, 0 = neutral. */
+export interface RGB {
+  r: number;
+  g: number;
+  b: number;
+}
+
+/** Resolve-style primary grade wheels + temperature/tint. */
+export interface ColorWheels {
+  lift: RGB;
+  gamma: RGB;
+  gain: RGB;
+  offset: RGB;
+  /** -100..100 */
+  temperature: number;
+  /** -100..100 */
+  tint: number;
+  /** 0..1 */
+  pivot: number;
+  /** 0..1 how strongly the grade blends into the original */
+  lumaMix: number;
+  /** Custom colour soft-clip controls, 0..1 normalised. */
+  low: number;
+  lowSoft: number;
+  high: number;
+  highSoft: number;
+  softClip: boolean;
+}
+
+export interface Lut3D {
+  name: string;
+  size: number;
+  /** size^3 * 3 floats in 0..1, blue-fastest (DaVinci/.cube order) */
+  data: number[];
+}
+
+export interface CurvePoint {
+  /** 0..1 input */
+  x: number;
+  /** 0..1 output */
+  y: number;
+}
+
+export interface Curves {
+  master: CurvePoint[];
+  red: CurvePoint[];
+  green: CurvePoint[];
+  blue: CurvePoint[];
+}
+
+export type GeneratorType =
+  | 'none'
+  | 'grey-scale'
+  | 'ebu-bars'
+  | 'smpte-bars'
+  | 'ten-step'
+  | 'white'
+  | 'window'
+  | 'ycbcr-ramp'
+  | 'solid-color';
+
+export interface EffectInstance {
+  id: string;
+  type: EffectType;
+  enabled: boolean;
+  params: Record<string, number>;
+  /** Render as a parallel branch in the node graph. */
+  parallel?: boolean;
+}
+
+export interface AudioFilter {
+  /** dB, -12..12 */
+  eqLow: number;
+  eqMid: number;
+  eqHigh: number;
+  /** 0..1 */
+  noiseReduction: number;
+  /** 0..1 */
+  voiceEnhance: number;
+  /** semitones, -12..12 */
+  pitch: number;
+}
+
+export interface Keyframe {
+  id: string;
+  /** normalised progress through the clip, 0..1 */
+  t: number;
+  transform: Partial<Transform>;
+  opacity?: number;
 }
 
 export interface ColorAdjust {
@@ -76,7 +177,28 @@ export interface ChromaKey {
   spill: number; // 0..1
 }
 
-export type TransitionType = 'none' | 'fade' | 'dip' | 'slide-left' | 'slide-right' | 'wipe';
+export type TransitionType =
+  | 'none'
+  | 'fade'
+  | 'dip'
+  | 'slide-left'
+  | 'slide-right'
+  | 'wipe'
+  | 'cross-dissolve'
+  | 'additive-dissolve'
+  | 'dip-to-color'
+  | 'center-wipe'
+  | 'clock-wipe'
+  | 'edge-wipe'
+  | 'venetian-blind'
+  | 'cross-iris'
+  | 'diamond-iris'
+  | 'oval-iris'
+  | '5-star'
+  | 'box'
+  | 'heart'
+  | 'triangle-left'
+  | 'triangle-right';
 
 export interface Transition {
   type: TransitionType;
@@ -84,6 +206,13 @@ export interface Transition {
 }
 
 export type TextAnimation = 'none' | 'fade' | 'slide-up' | 'slide-down' | 'slide-left' | 'slide-right' | 'pop' | 'typewriter';
+
+export type TitleTemplate =
+  | 'basic'
+  | 'scroller'
+  | 'lower-third-left'
+  | 'lower-third-middle'
+  | 'lower-third-right';
 
 export interface TextStyle {
   text: string;
@@ -97,7 +226,26 @@ export interface TextStyle {
   bold: boolean;
   italic: boolean;
   animation: TextAnimation;
+  template?: TitleTemplate;
 }
+
+export type EffectType =
+  | 'blur'
+  | 'sharpen'
+  | 'glitch'
+  | 'vignette'
+  | 'glow'
+  | 'grain'
+  | 'light-rays'
+  | 'lens-flare'
+  | 'lens-reflections'
+  | 'aperture-diffraction'
+  | 'color-generator'
+  | 'grid'
+  | 'beauty'
+  | 'face-refinement'
+  | 'alpha-shrink-grow'
+  | 'color-palette';
 
 export interface ClipEffects {
   fadeIn: number; // seconds
@@ -120,11 +268,22 @@ export interface Clip {
   muted: boolean;
   transform: Transform;
   color: ColorAdjust;
+  wheels: ColorWheels;
+  curves: Curves;
   /** Resolve-style localised correction windows, painted over the global grade. */
   windows: PowerWindow[];
+  /** OpenFX / ResolveFX stack, applied in order. */
+  effectsList: EffectInstance[];
+  audio: AudioFilter;
+  /** transform keyframes, sorted by t */
+  keyframes: Keyframe[];
   chroma: ChromaKey;
   effects: ClipEffects;
   transitionIn: Transition;
+  /** imported .cube 3D LUT applied after the primary grade. */
+  lut?: Lut3D;
+  /** synthetic source for generators (color bars, ramps, solid colours). */
+  generator?: GeneratorType;
   text?: TextStyle;
 }
 
@@ -149,7 +308,8 @@ export interface ExportOptions {
   fps: number;
   videoBitrate: string;
   preset: 'ultrafast' | 'fast' | 'medium';
-  format: 'mp4' | 'webm';
+  format: 'mp4' | 'webm' | 'mov';
+  codec: 'h264' | 'h265';
 }
 
 export const DEFAULT_TRANSFORM: Transform = {
@@ -159,6 +319,12 @@ export const DEFAULT_TRANSFORM: Transform = {
   rotation: 0,
   opacity: 1,
   fit: 'contain',
+  flipX: false,
+  flipY: false,
+  cropTop: 0,
+  cropRight: 0,
+  cropBottom: 0,
+  cropLeft: 0,
 };
 
 export const DEFAULT_COLOR: ColorAdjust = {
@@ -169,6 +335,45 @@ export const DEFAULT_COLOR: ColorAdjust = {
   blur: 0,
   sepia: 0,
   grayscale: 0,
+};
+
+const NEUTRAL_RGB: RGB = { r: 0, g: 0, b: 0 };
+
+export const DEFAULT_WHEELS: ColorWheels = {
+  lift: { ...NEUTRAL_RGB },
+  gamma: { ...NEUTRAL_RGB },
+  gain: { ...NEUTRAL_RGB },
+  offset: { ...NEUTRAL_RGB },
+  temperature: 0,
+  tint: 0,
+  pivot: 0.435,
+  lumaMix: 1,
+  low: 0,
+  lowSoft: 0,
+  high: 1,
+  highSoft: 0,
+  softClip: false,
+};
+
+export const IDENTITY_CURVE: CurvePoint[] = [
+  { x: 0, y: 0 },
+  { x: 1, y: 1 },
+];
+
+export const DEFAULT_CURVES: Curves = {
+  master: IDENTITY_CURVE.map((p) => ({ ...p })),
+  red: IDENTITY_CURVE.map((p) => ({ ...p })),
+  green: IDENTITY_CURVE.map((p) => ({ ...p })),
+  blue: IDENTITY_CURVE.map((p) => ({ ...p })),
+};
+
+export const DEFAULT_AUDIO_FILTER: AudioFilter = {
+  eqLow: 0,
+  eqMid: 0,
+  eqHigh: 0,
+  noiseReduction: 0,
+  voiceEnhance: 0,
+  pitch: 0,
 };
 
 export const DEFAULT_POWER_WINDOW: PowerWindow = {

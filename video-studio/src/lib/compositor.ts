@@ -1,6 +1,9 @@
-import type { Clip, MediaAsset, Track } from '../types';
+import type { Clip, MediaAsset, Track, Transform } from '../types';
 import { DEFAULT_COLOR, type PowerWindow } from '../types';
 import { drawTextLayer } from './textRender';
+import { applyLuts, applyLut3D, buildChannelLuts, isGradeIdentity } from './color';
+import { drawEffectOverlays, effectFilterParts } from './effects';
+import { drawGenerator } from './generators';
 
 /* ------------------------------------------------------------------ *
  * Chroma key: a tiny WebGL pass. Doing this in JS per pixel would tank
@@ -131,7 +134,7 @@ class ChromaKeyer {
  * ------------------------------------------------------------------ */
 
 interface Drawable {
-  el: HTMLVideoElement | HTMLImageElement;
+  el: HTMLVideoElement | HTMLImageElement | HTMLCanvasElement;
   width: number;
   height: number;
 }
@@ -140,6 +143,8 @@ export class Compositor {
   private videos = new Map<string, HTMLVideoElement>();
   private images = new Map<string, HTMLImageElement>();
   private keyer = new ChromaKeyer();
+  private gradeCanvas = document.createElement('canvas');
+  private generatorCanvas = document.createElement('canvas');
   private lastArgs: { time: number; clips: Clip[]; tracks: Track[]; assets: Map<string, MediaAsset> } | null =
     null;
 
@@ -268,17 +273,44 @@ export class Compositor {
     const local = (time - clip.start) / Math.max(0.0001, clip.duration);
     const transition = clip.transitionIn;
 
-    let alpha = clip.transform.opacity;
+    const kf = this.keyframeAt(clip, local);
+    const transform = { ...clip.transform, ...kf };
+
+    let alpha = transform.opacity;
     let offsetX = 0;
     let wipeWidth = 1;
 
     if (transition.type !== 'none' && transition.duration > 0) {
       const p = Math.min(1, (time - clip.start) / transition.duration);
       const eased = 1 - Math.pow(1 - p, 3);
-      if (transition.type === 'fade' || transition.type === 'dip') alpha *= eased;
+      if (
+        transition.type === 'fade' ||
+        transition.type === 'dip' ||
+        transition.type === 'cross-dissolve' ||
+        transition.type === 'additive-dissolve' ||
+        transition.type === 'dip-to-color'
+      ) {
+        alpha *= eased;
+      }
       if (transition.type === 'slide-left') offsetX = (1 - eased) * width;
       if (transition.type === 'slide-right') offsetX = -(1 - eased) * width;
-      if (transition.type === 'wipe') wipeWidth = eased;
+      if (
+        transition.type === 'wipe' ||
+        transition.type === 'center-wipe' ||
+        transition.type === 'clock-wipe' ||
+        transition.type === 'edge-wipe' ||
+        transition.type === 'venetian-blind' ||
+        transition.type === 'cross-iris' ||
+        transition.type === 'diamond-iris' ||
+        transition.type === 'oval-iris' ||
+        transition.type === '5-star' ||
+        transition.type === 'box' ||
+        transition.type === 'heart' ||
+        transition.type === 'triangle-left' ||
+        transition.type === 'triangle-right'
+      ) {
+        wipeWidth = eased;
+      }
     }
 
     // clip-level fade in/out
@@ -299,24 +331,36 @@ export class Compositor {
       return;
     }
 
-    if (!clip.assetId) return;
-    const asset = assets.get(clip.assetId);
-    if (!asset) return;
-
     let drawable: Drawable | null = null;
-    if (asset.kind === 'image') {
-      const img = this.imageFor(asset);
-      if (img.complete) drawable = { el: img, width: img.naturalWidth, height: img.naturalHeight };
-    } else if (asset.kind === 'video') {
-      const el = this.videoFor(asset);
-      if (el.readyState >= 2) drawable = { el, width: el.videoWidth, height: el.videoHeight };
+    if (clip.generator && clip.generator !== 'none') {
+      if (this.generatorCanvas.width !== width || this.generatorCanvas.height !== height) {
+        this.generatorCanvas.width = width;
+        this.generatorCanvas.height = height;
+      }
+      const gctx = this.generatorCanvas.getContext('2d');
+      if (gctx) {
+        gctx.clearRect(0, 0, width, height);
+        drawGenerator(gctx, clip.generator, width, height);
+        drawable = { el: this.generatorCanvas, width, height };
+      }
+    } else {
+      if (!clip.assetId) return;
+      const asset = assets.get(clip.assetId);
+      if (!asset) return;
+      if (asset.kind === 'image') {
+        const img = this.imageFor(asset);
+        if (img.complete) drawable = { el: img, width: img.naturalWidth, height: img.naturalHeight };
+      } else if (asset.kind === 'video') {
+        const el = this.videoFor(asset);
+        if (el.readyState >= 2) drawable = { el, width: el.videoWidth, height: el.videoHeight };
+      }
     }
 
     if (!drawable) return;
 
     const zoom = 1 + (clip.effects.zoom - 1) * local;
-    const scale = clip.transform.scale * zoom;
-    const rotation = (clip.transform.rotation * Math.PI) / 180;
+    const scale = transform.scale * zoom;
+    const rotation = (transform.rotation * Math.PI) / 180;
 
     ctx.save();
     ctx.globalAlpha = Math.min(1, alpha);
@@ -330,46 +374,154 @@ export class Compositor {
     if (clip.color.blur > 0) filterParts.push(`blur(${clip.color.blur}px)`);
     if (clip.color.sepia > 0) filterParts.push(`sepia(${clip.color.sepia})`);
     if (clip.color.grayscale > 0) filterParts.push(`grayscale(${clip.color.grayscale})`);
+    filterParts.push(...effectFilterParts(clip.effectsList));
     ctx.filter = filterParts.join(' ');
 
     let source: CanvasImageSource = drawable.el;
-    if (clip.chroma.enabled && this.keyer.available) {
+    if (clip.chroma.enabled && this.keyer.available && !(drawable.el instanceof HTMLCanvasElement)) {
       const keyed = this.keyer.draw(drawable.el as HTMLVideoElement, clip);
       if (keyed) source = keyed;
     }
 
-    const srcRatio = drawable.width / drawable.height;
+    // Per-pixel LUT pass for wheels + curves + imported 3D LUTs.
+    // Skipped when the grade is neutral.
+    if (!isGradeIdentity(clip.wheels, clip.curves) || clip.lut) {
+      const gc = this.gradeCanvas;
+      const gw = Math.max(2, Math.round(drawable.width));
+      const gh = Math.max(2, Math.round(drawable.height));
+      if (gc.width !== gw || gc.height !== gh) {
+        gc.width = gw;
+        gc.height = gh;
+      }
+      const gctx = gc.getContext('2d');
+      if (gctx) {
+        gctx.clearRect(0, 0, gw, gh);
+        gctx.drawImage(source, 0, 0, gw, gh);
+        const img = gctx.getImageData(0, 0, gw, gh);
+        if (!isGradeIdentity(clip.wheels, clip.curves)) {
+          applyLuts(img.data, buildChannelLuts(clip.wheels, clip.curves));
+        }
+        if (clip.lut) applyLut3D(img.data, clip.lut);
+        gctx.putImageData(img, 0, 0);
+        source = gc;
+      }
+    }
+
+    const cropL = Math.min(0.45, Math.max(0, transform.cropLeft ?? 0));
+    const cropR = Math.min(0.45, Math.max(0, transform.cropRight ?? 0));
+    const cropT = Math.min(0.45, Math.max(0, transform.cropTop ?? 0));
+    const cropB = Math.min(0.45, Math.max(0, transform.cropBottom ?? 0));
+    const srcX = drawable.width * cropL;
+    const srcY = drawable.height * cropT;
+    const srcW = Math.max(2, drawable.width * (1 - cropL - cropR));
+    const srcH = Math.max(2, drawable.height * (1 - cropT - cropB));
+
+    const srcRatio = srcW / srcH;
     const dstRatio = width / height;
     let drawW = width;
     let drawH = height;
-    if (clip.transform.fit === 'contain') {
+    if (transform.fit === 'contain') {
       if (srcRatio > dstRatio) drawH = width / srcRatio;
       else drawW = height * srcRatio;
-    } else if (clip.transform.fit === 'cover') {
+    } else if (transform.fit === 'cover') {
       if (srcRatio > dstRatio) drawW = height * srcRatio;
       else drawH = width / srcRatio;
     }
     drawW *= scale;
     drawH *= scale;
 
-    let tx = width / 2 + offsetX;
-    let ty = height / 2 + clip.transform.y * height;
-    if (clip.transform.fit === 'cover') {
+    let tx = width / 2 + offsetX + transform.x * width;
+    let ty = height / 2 + transform.y * height;
+    if (transform.fit === 'cover') {
       if (drawW > width) tx -= (drawW - width) / 2;
       if (drawH > height) ty -= (drawH - height) / 2;
     }
 
     ctx.translate(tx, ty);
     ctx.rotate(rotation);
+    if (transform.flipX || transform.flipY) {
+      ctx.scale(transform.flipX ? -1 : 1, transform.flipY ? -1 : 1);
+    }
 
-    if (transition.type === 'wipe') {
+    if (wipeWidth < 1) {
+      const halfW = drawW / 2;
+      const halfH = drawH / 2;
+      const p = Math.max(0, wipeWidth);
       ctx.beginPath();
-      ctx.rect(-drawW / 2, -drawH / 2, drawW * wipeWidth, drawH);
+      switch (transition.type) {
+        case 'center-wipe':
+          ctx.rect(-halfW * p, -halfH, drawW * p, drawH);
+          break;
+        case 'box':
+        case 'cross-iris':
+          ctx.rect(-halfW * p, -halfH * p, drawW * p, drawH * p);
+          break;
+        case 'oval-iris':
+          ctx.ellipse(0, 0, halfW * p, halfH * p, 0, 0, Math.PI * 2);
+          break;
+        case 'diamond-iris':
+          ctx.moveTo(0, -halfH * p);
+          ctx.lineTo(halfW * p, 0);
+          ctx.lineTo(0, halfH * p);
+          ctx.lineTo(-halfW * p, 0);
+          ctx.closePath();
+          break;
+        case '5-star': {
+          const outer = Math.min(halfW, halfH) * p;
+          const inner = outer * 0.42;
+          for (let i = 0; i < 10; i++) {
+            const r = i % 2 === 0 ? outer : inner;
+            const a = -Math.PI / 2 + (i * Math.PI) / 5;
+            const px = Math.cos(a) * r;
+            const py = Math.sin(a) * r;
+            if (i === 0) ctx.moveTo(px, py);
+            else ctx.lineTo(px, py);
+          }
+          ctx.closePath();
+          break;
+        }
+        case 'heart': {
+          const s = Math.min(halfW, halfH) * p;
+          ctx.moveTo(0, s * 0.75);
+          ctx.bezierCurveTo(-s * 1.5, -s * 0.2, -s * 0.5, -s * 1.1, 0, -s * 0.4);
+          ctx.bezierCurveTo(s * 0.5, -s * 1.1, s * 1.5, -s * 0.2, 0, s * 0.75);
+          ctx.closePath();
+          break;
+        }
+        case 'triangle-left':
+          ctx.moveTo(-halfW, -halfH);
+          ctx.lineTo(-halfW + drawW * p, halfH);
+          ctx.lineTo(-halfW, halfH);
+          ctx.closePath();
+          break;
+        case 'triangle-right':
+          ctx.moveTo(halfW, -halfH);
+          ctx.lineTo(halfW - drawW * p, halfH);
+          ctx.lineTo(halfW, halfH);
+          ctx.closePath();
+          break;
+        case 'clock-wipe':
+          ctx.moveTo(0, 0);
+          ctx.arc(0, 0, Math.hypot(halfW, halfH), -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * p);
+          ctx.closePath();
+          break;
+        case 'venetian-blind': {
+          const blinds = 8;
+          const h = drawH / blinds;
+          for (let i = 0; i < blinds; i++) {
+            ctx.rect(-halfW, -halfH + i * h, drawW, h * p);
+          }
+          break;
+        }
+        default:
+          ctx.rect(-halfW, -halfH, drawW * p, drawH);
+          break;
+      }
       ctx.clip();
     }
 
     try {
-      ctx.drawImage(source, -drawW / 2, -drawH / 2, drawW, drawH);
+      ctx.drawImage(source, srcX, srcY, srcW, srcH, -drawW / 2, -drawH / 2, drawW, drawH);
     } catch {
       /* frame not ready */
     }
@@ -377,6 +529,12 @@ export class Compositor {
     // Close the clip transform/filter state: correction windows live in
     // frame (screen) space, so they must be painted without the transform.
     ctx.restore();
+
+    // Overlay-only effects (vignette, grain, grids, light effects) are painted
+    // in frame space so they line up with the viewer.
+    if (clip.effectsList.length > 0) {
+      drawEffectOverlays(ctx, clip.effectsList, width, height);
+    }
 
     // ----- PowerWindows: draw per-clip local correction windows ----
     const activeWindows = (clip.windows ?? []).filter(
@@ -447,6 +605,44 @@ export class Compositor {
       }
       ctx.restore();
     }
+  }
+
+  /** Interpolate transform keyframes for the given clip progress (0..1). */
+  private keyframeAt(clip: Clip, local: number): Partial<Transform> {
+    const keys = [...(clip.keyframes ?? [])].sort((a, b) => a.t - b.t);
+    if (keys.length === 0) return {};
+    if (keys.length === 1) {
+      return { ...keys[0].transform, ...(keys[0].opacity !== undefined ? { opacity: keys[0].opacity } : {}) };
+    }
+    const t = Math.min(1, Math.max(0, local));
+    if (t <= keys[0].t) {
+      return { ...keys[0].transform, ...(keys[0].opacity !== undefined ? { opacity: keys[0].opacity } : {}) };
+    }
+    const last = keys[keys.length - 1];
+    if (t >= last.t) {
+      return { ...last.transform, ...(last.opacity !== undefined ? { opacity: last.opacity } : {}) };
+    }
+    for (let i = 1; i < keys.length; i++) {
+      const a = keys[i - 1];
+      const b = keys[i];
+      if (t <= b.t) {
+        const span = Math.max(0.00001, b.t - a.t);
+        const p = (t - a.t) / span;
+        const ease = p * p * (3 - 2 * p);
+        const out: Partial<Transform> = {};
+        const fields: (keyof Transform)[] = ['x', 'y', 'scale', 'rotation', 'opacity'];
+        for (const f of fields) {
+          const av = (a.transform[f] ?? clip.transform[f]) as number;
+          const bv = (b.transform[f] ?? clip.transform[f]) as number;
+          (out as Record<string, unknown>)[f] = av + (bv - av) * ease;
+        }
+        const ao = a.opacity ?? a.transform.opacity ?? clip.transform.opacity;
+        const bo = b.opacity ?? b.transform.opacity ?? clip.transform.opacity;
+        out.opacity = ao + (bo - ao) * ease;
+        return out;
+      }
+    }
+    return {};
   }
 
   dispose() {
